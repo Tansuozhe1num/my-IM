@@ -208,33 +208,41 @@ public class UserContactServiceImpl implements UserContactService {
 		}
 
 		UserContact contact = this.userContactMapper.selectByUserIdAndContactId(UserId, ContactId);
-		if (contact != null || contact.getStatus().equals(UserContactApplyEnum.Progress.getStatus())) {
-			// TODO: 发送WS消息
+		if (contact != null && contact.getStatus().equals(UserContactStatusEnum.FRIEND.getStatus())) {
 			throw new BusinessException("已经是好友或者已经在群组中");
+		}
+		if (contact != null && contact.getStatus().equals(UserContactStatusEnum.BLACKLIST_BE.getStatus())) {
+			throw new BusinessException("被拉黑");
 		}
 
 		UserContactApply apply = this.userContactApplyMapper.selectByApplyUserIdAndReceiveUserIdAndContactId(UserId, ContactId, ContactId);
-		if (apply != null && !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus())) {
+		boolean needToSendWs = (apply == null || !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus()));
+		if (apply != null) {
 			apply.setLastApplyTime(System.currentTimeMillis());
+			apply.setStatus(UserContactApplyEnum.Progress.getStatus());
+			apply.setApplyInfo(ApplyInfo);
 			this.userContactApplyMapper.updateByApplyId(apply, apply.getApplyId());
-			return;
+		} else {
+			String ReceiveId = ContactId;
+			if (ContactType.equals(UserContactTypeEnum.Group)) {
+				GroupInfo groupinfo = this.groupInfoMapper.selectByGroupId(ContactId);
+				ReceiveId = groupinfo.getGroupOwnerId();
+			}
+			apply = new UserContactApply();
+			apply.setApplyUserId(UserId);
+			apply.setReceiveUserId(ReceiveId);
+			apply.setContactType(UserContactTypeEnum.USER.getType());
+			apply.setApplyInfo(ApplyInfo);
+			apply.setContactId(ContactId);
+			apply.setLastApplyTime((new Date()).getTime());
+			apply.setStatus(UserContactApplyEnum.Progress.getStatus());
+
+			this.userContactApplyMapper.insert(apply);
 		}
 
-		String ReceiveId = ContactId;
-		if (ContactType.equals(UserContactTypeEnum.Group)) {
-			GroupInfo groupinfo = this.groupInfoMapper.selectByGroupId(ContactId);
-			ReceiveId = groupinfo.getGroupOwnerId();
-		}
-		apply = new UserContactApply();
-		apply.setApplyUserId(UserId);
-		apply.setReceiveUserId(ReceiveId);
-		apply.setContactType(UserContactTypeEnum.USER.getType());
-		apply.setApplyInfo(ApplyInfo);
-		apply.setContactId(ContactId);
-		apply.setLastApplyTime((new Date()).getTime());
-		apply.setStatus(UserContactApplyEnum.Progress.getStatus());
+		if (needToSendWs) {
 
-		this.userContactApplyMapper.insert(apply);
+		}
 	}
 
 	@Override

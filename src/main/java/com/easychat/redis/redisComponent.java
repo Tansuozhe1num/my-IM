@@ -1,8 +1,10 @@
 package com.easychat.redis;
 
 import com.easychat.entity.constants.Constants;
+import com.easychat.entity.dto.DelayMessageDto;
 import com.easychat.entity.dto.SysSettingDto;
 import com.easychat.entity.dto.TokenUserinfoDTO;
+import com.easychat.utils.JsonUtils;
 import com.easychat.utils.StringTools;
 import jdk.nashorn.internal.parser.Token;
 import org.apache.commons.lang3.StringUtils;
@@ -40,6 +42,11 @@ public class redisComponent {
         return dto;
     }
 
+    public void deleteTokenUserInfoDTO(String userId) {
+        String token = (String) redisUtils.get(Constants.REDIS_KEY_WS_TOKEN_USERID + userId);
+        redisUtils.delete(Constants.REDIS_KEY_WS_TOKEN + token);
+    }
+
     public SysSettingDto getSysSettingDTO() {
         SysSettingDto settingdto = (SysSettingDto) redisUtils.get(Constants.REDIS_SYSTEM_CONFIG);
         settingdto = settingdto == null ? new SysSettingDto() : settingdto;
@@ -67,4 +74,17 @@ public class redisComponent {
         List<String> result = (List<String>) redisUtils.getQueueList(Constants.REDIS_CONTACT_LIST + userId);
         return result;
     }
+
+    public void setMessageSend(String messageId) {
+        redisUtils.setex(Constants.REDIS_MQ_MESSAGE_ONLY_MARK + messageId, 1, 3 * 60);
+    }
+
+    public Integer getMessageSend(String messageId) {
+        return (Integer) redisUtils.get(Constants.REDIS_MQ_MESSAGE_ONLY_MARK + messageId);
+    }
+
+    public void saveExtendMqMessage(DelayMessageDto msg) {
+        redisUtils.set(Constants.REDIS_MQ_EXTEND_MESSAGE + msg.getMessageId(), JsonUtils.convertObj2Json(msg));
+    }
+
 }

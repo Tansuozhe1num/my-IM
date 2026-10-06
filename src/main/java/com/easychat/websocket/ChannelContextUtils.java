@@ -5,6 +5,7 @@ import com.easychat.entity.dto.WsInitData;
 import com.easychat.entity.enums.MessageTypeEnum;
 import com.easychat.entity.enums.UserContactApplyEnum;
 import com.easychat.entity.enums.UserContactStatusEnum;
+import com.easychat.entity.enums.UserContactTypeEnum;
 import com.easychat.entity.po.ChatMessage;
 import com.easychat.entity.po.ChatSessionUser;
 import com.easychat.entity.po.UserInfo;
@@ -23,6 +24,7 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.GlobalEventExecutor;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -125,20 +127,6 @@ public class ChannelContextUtils {
         sendMsg(messageSendDto, UserId);
     }
 
-    public void sendMsg(MessageSendDto msg, String receive) {
-        if (receive == null) {
-            return;
-        }
-        Channel receiveChan = USER_CONTEXT_MAP.get(receive);
-        if (receiveChan == null) {
-            return;
-        }
-
-        msg.setContactId(msg.getSendUserId());
-        msg.setContactName(msg.getSendUserNickName());
-        receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg)));
-    }
-
     public void add2Group(String groupId, Channel channel) {
         ChannelGroup group = GROUP_CONTEXT_LIST.get(groupId);
         if (group == null) {
@@ -171,5 +159,63 @@ public class ChannelContextUtils {
             // 应用停机时连接池可能已关闭，避免异常冲到 Netty pipeline 尾部
             logger.warn("更新用户离线时间失败, userId={}", userId, e);
         }
+    }
+
+    public void sendMessage(MessageSendDto msg) {
+        UserContactTypeEnum userContactTypeEnum = UserContactTypeEnum.getByPrefix(msg.getContactId());
+        switch (userContactTypeEnum) {
+            case USER:
+                send2User(msg);
+                break;
+            case Group:
+                send2Group(msg);
+                break;
+        }
+    }
+
+    public void send2User(MessageSendDto msg) {
+        String ContactId = msg.getContactId();
+        if (ContactId == null) {
+            return;
+        }
+        sendMsg(msg, ContactId);
+        // 强制下线
+        if (MessageTypeEnum.FORCE_OFF_LINE.getType().equals(msg.getMessageType())) {
+            String userId = msg.getContactId();
+            if (StringUtils.isEmpty(userId)) {
+                return;
+            }
+            redisComponent.deleteTokenUserInfoDTO(userId);
+            Channel channel = USER_CONTEXT_MAP.get(userId);
+            if (channel == null) {
+                return;
+            }
+            channel.close();
+        }
+    }
+
+    public void send2Group(MessageSendDto msg) {
+        if (msg.getContactId() == null) {
+            return;
+        }
+        ChannelGroup receiveChan = GROUP_CONTEXT_LIST.get(msg.getContactId());
+        if (receiveChan == null) {
+            return;
+        }
+        receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg.getMessageContent())));
+    }
+
+    public void sendMsg(MessageSendDto msg, String receive) {
+        if (receive == null) {
+            return;
+        }
+        Channel receiveChan = USER_CONTEXT_MAP.get(receive);
+        if (receiveChan == null) {
+            return;
+        }
+
+        msg.setContactId(msg.getSendUserId());
+        msg.setContactName(msg.getSendUserNickName());
+        receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg)));
     }
 }
