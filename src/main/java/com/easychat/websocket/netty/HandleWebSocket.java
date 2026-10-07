@@ -9,7 +9,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.util.Attribute;
@@ -62,15 +62,20 @@ public class HandleWebSocket extends SimpleChannelInboundHandler<TextWebSocketFr
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt instanceof WebSocketServerProtocolHandler.HandshakeComplete) {
             WebSocketServerProtocolHandler.HandshakeComplete complete = (WebSocketServerProtocolHandler.HandshakeComplete) evt;
-            HttpHeaders header = complete.requestHeaders();
-            String token = header.get("token");
+            String token = new QueryStringDecoder(complete.requestUri()).parameters()
+                    .getOrDefault("token", java.util.Collections.<String>emptyList())
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
             if (token == null) {
+                logger.warn("WebSocket 握手缺少 token 查询参数");
                 ctx.channel().close();
                 return;
             }
 
             TokenUserinfoDTO tokenUserInfoDTO = redisComponent.getTokenUserInfoDTO(token);
             if (null == tokenUserInfoDTO) {
+               logger.warn("WebSocket 握手 token 无效");
                ctx.channel().close();
                return;
             }

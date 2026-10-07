@@ -1,15 +1,10 @@
 package com.easychat.service.impl;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import javax.annotation.Resource;
 
+import com.easychat.entity.dto.MessageSendDto;
 import com.easychat.entity.dto.SysSettingDto;
 import com.easychat.entity.enums.*;
 import com.easychat.entity.po.*;
@@ -20,6 +15,10 @@ import com.easychat.entity.vo.SearchVo;
 import com.easychat.exception.BusinessException;
 import com.easychat.mappers.*;
 import com.easychat.redis.redisComponent;
+import com.easychat.utils.IdGenerator;
+import com.easychat.websocket.ChannelContextUtils;
+import com.easychat.websocket.messageHandle;
+import io.netty.channel.ChannelHandler;
 import org.apache.catalina.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +61,9 @@ public class UserContactServiceImpl implements UserContactService {
 	private ChatMessageMapper<ChatMessage, ChatMessageQuery> chatMessageMapper;
 
 	private static final Logger logger = LoggerFactory.getLogger(UserInfoServiceImpl.class);
+
+	@Resource
+	private messageHandle messageHandle;
 	/**
 	 * 根据条件查询列表
 	 */
@@ -171,16 +173,19 @@ public class UserContactServiceImpl implements UserContactService {
 			throw new BusinessException(ResponseCodeEnum.CODE_600);
 		}
 
-		UserContact Info = this.userContactMapper.selectByUserIdAndContactId(UserId, ContactId);
-		if (Info == null) {
-			throw new BusinessException("查询不到群组");
-		}
+//		UserContact Info = this.userContactMapper.selectByUserIdAndContactId(UserId, ContactId);
+//		if (Info == null) {
+//			throw new BusinessException("查询不到群组");
+//		}
 
-		Integer type = Info.getContactType();
+//		Integer type = Info.getContactType();
+
+		UserInfo userInfo = this.userInfoMapper.selectByUserId(ContactId);
+
 		SearchVo result = new SearchVo();
 		List<UserInfo> userInfoList = new ArrayList<>();
-		if (type.equals(UserContactTypeEnum.USER.getType())) { // 查询单一用户
-			UserInfo userInfo = this.userInfoMapper.selectByUserId(ContactId);
+		if (userInfo != null) { // 查询单一用户
+		//UserInfo userInfo = this.userInfoMapper.selectByUserId(ContactId);
 			userInfoList.add(userInfo);
 		} else { // 查询群组信息
 			GroupInfo groupInfo = this.groupInfoMapper.selectByGroupId(ContactId);
@@ -192,8 +197,8 @@ public class UserContactServiceImpl implements UserContactService {
 			query.setContactType(UserContactTypeEnum.Group.getType());
 			List<UserContact> infos = this.userContactMapper.selectList(query);
 			for (UserContact info : infos) {
-				UserInfo userInfo = this.userInfoMapper.selectByUserId(info.getUserId());
-				userInfoList.add(userInfo);
+				UserInfo k = this.userInfoMapper.selectByUserId(info.getUserId());
+				userInfoList.add(k);
 			}
 			result.setGroupInfo(groupInfo);
 		}
@@ -241,19 +246,34 @@ public class UserContactServiceImpl implements UserContactService {
 		}
 
 		if (needToSendWs) {
+			MessageSendDto messageSendDto = MessageSendDto.builder()
+					.messageType(MessageTypeEnum.CONTACT_APPLY.getType())
+					.messageId(IdGenerator.nextIdLong())
+					.messageContent(ApplyInfo)
+					.contactId(ContactId)
+					.build();
 
+			messageHandle.sendMsg(messageSendDto);
 		}
 	}
 
 	@Override
 	@Transactional(rollbackFor = Exception.class)
 	public void SolveApply(String UserId, String ContactId, Integer accept) {
-		if (ContactId == null) {
+		if (ContactId == null || accept == null || accept < UserContactApplyEnum.Accept.getStatus() || accept > UserContactApplyEnum.Black.getStatus()) {
 			throw new BusinessException(ResponseCodeEnum.CODE_600);
 		}
 
-		UserContactApply apply = this.userContactApplyMapper.selectByContactId(ContactId);
-		if (apply == null || !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus())) {
+		Integer applyId;
+		try {
+			applyId = Integer.valueOf(ContactId);
+		} catch (NumberFormatException e) {
+			throw new BusinessException(ResponseCodeEnum.CODE_600);
+		}
+		UserContactApply apply = this.userContactApplyMapper.selectByApplyId(applyId);
+		if (apply == null
+				|| !UserId.equals(apply.getReceiveUserId())
+				|| !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus())) {
 			throw new BusinessException("申请已经失效");
 		}
 		apply.setStatus(accept);
@@ -269,14 +289,22 @@ public class UserContactServiceImpl implements UserContactService {
 		}
 
 		if (accept.equals(UserContactApplyEnum.Black.getStatus())) {
-			UserContact contact = new UserContact();
-			contact.setUserId(UserId);
-			contact.setContactType(apply.getContactType());
-			contact.setContactId(apply.getReceiveUserId());
+			UserContact contact = this.userContactMapper.selectByUserIdAndContactId(UserId, apply.getApplyUserId());
+			if (contact == null) {
+				contact = new UserContact();
+				contact.setUserId(UserId);
+				contact.setContactId(apply.getApplyUserId());
+				contact.setContactType(UserContactTypeEnum.USER.getType());
+				contact.setCreateTime(new Date());
+			}
 			contact.setLastUpdateTime(new Date());
 			contact.setStatus(UserContactStatusEnum.BLACKLIST.getStatus());
-			this.userContactMapper.insert(contact);
-			logger.info("新加关系 : (" + contact.getUserId() + " : " + contact.getContactId() + ")");
+			if (this.userContactMapper.selectByUserIdAndContactId(UserId, apply.getApplyUserId()) == null) {
+				this.userContactMapper.insert(contact);
+			} else {
+				this.userContactMapper.updateByUserIdAndContactId(contact, UserId, apply.getApplyUserId());
+			}
+			logger.info("新加黑名单关系 : (" + contact.getUserId() + " : " + contact.getContactId() + ")");
 		}
 	}
 

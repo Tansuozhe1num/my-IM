@@ -65,8 +65,12 @@ public class messageDelayListener implements DelayListener {
 
                     logger.info("收到延迟消息: {}", delayMessageDto);
 
-                    // 2. 执行业务逻辑
-                    channelContextUtils.sendMessage((MessageSendDto) delayMessageDto.getMessage());
+                    // JSON enters the queue as a JSONObject, so convert the nested payload explicitly.
+                    MessageSendDto message = JsonUtils.convertJson2Obj(
+                            JsonUtils.convertObj2Json(delayMessageDto.getMessage()),
+                            MessageSendDto.class
+                    );
+                    channelContextUtils.sendMessage(message);
                 } catch (Exception e) {
                     logger.error("消息处理失败, 原始消息: {}", take, e);
                     if (take == null) {

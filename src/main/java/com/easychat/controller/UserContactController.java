@@ -65,12 +65,12 @@ public class UserContactController extends ABaseController {
 
     @RequestMapping("/solveApply")
     @GlobalInterceptor
-    public ResponseVO SolveApply(HttpServletRequest request, @NotNull String ContactId, @NotNull Integer accept) {
+    public ResponseVO SolveApply(HttpServletRequest request, @NotNull Integer applyId, @NotNull Integer accept) {
         TokenUserinfoDTO userinfoDTO = getTokenUserinfoDTO(request);
         if (userinfoDTO == null || userinfoDTO.getUserId() == null) {
             throw new BusinessException("未登录");
         }
-        this.userContactService.SolveApply(userinfoDTO.getUserId(), ContactId, accept);
+        this.userContactService.SolveApply(userinfoDTO.getUserId(), String.valueOf(applyId), accept);
         return getSuccessResponseVO("");
     }
 
