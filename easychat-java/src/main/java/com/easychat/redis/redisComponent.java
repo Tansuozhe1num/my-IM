@@ -11,6 +11,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -70,9 +71,18 @@ public class redisComponent {
         redisUtils.lpushAll(Constants.REDIS_CONTACT_LIST + userID, contactIdList, Constants.ONE_DAY);
     }
 
+    public void addUser(String userID, String contactId) {
+        List<String> userContactList = getUserContactList(userID);
+        if (userContactList != null && userContactList.contains(contactId)) {
+            return;
+        }
+        redisUtils.lpush(Constants.REDIS_CONTACT_LIST + userID, contactId, Constants.ONE_DAY);
+    }
+
+
     public List<String> getUserContactList(String userId) {
         List<String> result = (List<String>) redisUtils.getQueueList(Constants.REDIS_CONTACT_LIST + userId);
-        return result;
+        return result == null ? Collections.<String>emptyList() : result;
     }
 
     public void setMessageSend(String messageId) {

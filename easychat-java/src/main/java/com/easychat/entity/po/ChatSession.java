@@ -7,7 +7,7 @@ import java.io.Serializable;
 /**
  * 会话信息
  */
-public class ChatSession implements Serializable {
+public class  ChatSession implements Serializable {
 
 
 	/**

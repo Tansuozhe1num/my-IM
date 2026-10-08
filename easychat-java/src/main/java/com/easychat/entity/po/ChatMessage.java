@@ -1,12 +1,21 @@
 package com.easychat.entity.po;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import java.io.Serializable;
 
 
 /**
  * 聊天消息表
  */
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
 public class ChatMessage implements Serializable {
 
 
@@ -75,110 +84,6 @@ public class ChatMessage implements Serializable {
 	 */
 	private Integer status;
 
-
-	public void setMessageId(Long messageId){
-		this.messageId = messageId;
-	}
-
-	public Long getMessageId(){
-		return this.messageId;
-	}
-
-	public void setSessionId(String sessionId){
-		this.sessionId = sessionId;
-	}
-
-	public String getSessionId(){
-		return this.sessionId;
-	}
-
-	public void setMessageType(Integer messageType){
-		this.messageType = messageType;
-	}
-
-	public Integer getMessageType(){
-		return this.messageType;
-	}
-
-	public void setMessageContent(String messageContent){
-		this.messageContent = messageContent;
-	}
-
-	public String getMessageContent(){
-		return this.messageContent;
-	}
-
-	public void setSendUserId(String sendUserId){
-		this.sendUserId = sendUserId;
-	}
-
-	public String getSendUserId(){
-		return this.sendUserId;
-	}
-
-	public void setSendUserNickName(String sendUserNickName){
-		this.sendUserNickName = sendUserNickName;
-	}
-
-	public String getSendUserNickName(){
-		return this.sendUserNickName;
-	}
-
-	public void setSendTime(Long sendTime){
-		this.sendTime = sendTime;
-	}
-
-	public Long getSendTime(){
-		return this.sendTime;
-	}
-
-	public void setContactId(String contactId){
-		this.contactId = contactId;
-	}
-
-	public String getContactId(){
-		return this.contactId;
-	}
-
-	public void setContactType(Integer contactType){
-		this.contactType = contactType;
-	}
-
-	public Integer getContactType(){
-		return this.contactType;
-	}
-
-	public void setFileSize(Long fileSize){
-		this.fileSize = fileSize;
-	}
-
-	public Long getFileSize(){
-		return this.fileSize;
-	}
-
-	public void setFileName(String fileName){
-		this.fileName = fileName;
-	}
-
-	public String getFileName(){
-		return this.fileName;
-	}
-
-	public void setFileType(Integer fileType){
-		this.fileType = fileType;
-	}
-
-	public Integer getFileType(){
-		return this.fileType;
-	}
-
-	public void setStatus(Integer status){
-		this.status = status;
-	}
-
-	public Integer getStatus(){
-		return this.status;
-	}
 
 	@Override
 	public String toString (){

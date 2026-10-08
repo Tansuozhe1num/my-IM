@@ -56,6 +56,9 @@ public class MessageSendDto<T> implements Serializable {
     // 消息状态 0:发送中 1:已发送 对于文件是异步上传状态处理
     private Integer status;
 
+    // 客户端用于关联发送回执，不写入消息表
+    private String clientMessageId;
+
     // 文件信息
     private Long fileSize;
     private String fileName;

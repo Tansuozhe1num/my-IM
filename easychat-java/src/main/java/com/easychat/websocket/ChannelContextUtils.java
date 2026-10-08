@@ -81,7 +81,7 @@ public class ChannelContextUtils {
 
         UserInfo userInfo = new UserInfo();
         userInfo.setLastLoginTime(new Date());
-        userInfoMapper.updateByUserId(userInfo, userInfo.getUserId());
+        userInfoMapper.updateByUserId(userInfo, UserId);
 
         UserInfo info = userInfoMapper.selectByUserId(UserId);
         Long lastOffTime = info.getLastOffTime();
@@ -110,7 +110,7 @@ public class ChannelContextUtils {
          */
         UserContactApplyQuery q3 = new UserContactApplyQuery();
         q3.setStatus(UserContactApplyEnum.Progress.getStatus());
-        q3.setContactId(UserId);
+        q3.setReceiveUserId(UserId);
         Integer applyCount = userContactApplyService.findCountByParam(q3);
 
         WsInitData initData = WsInitData.builder()
@@ -213,9 +213,25 @@ public class ChannelContextUtils {
         if (receiveChan == null) {
             return;
         }
-
-        msg.setContactId(msg.getSendUserId());
-        msg.setContactName(msg.getSendUserNickName());
+        if (!MessageTypeEnum.ADD_FRIEND_SELF.getType().equals(msg.getMessageType())) {
+            msg.setContactId(msg.getSendUserId());
+            msg.setContactName(msg.getSendUserNickName());
+        } else {
+            if (msg.getExtendData() == null) {
+                logger.warn("好友欢迎消息缺少会话联系人信息，messageId={}", msg.getMessageId());
+                return;
+            }
+            ChatSessionUser sessionUser = msg.getExtendData() instanceof ChatSessionUser
+                    ? (ChatSessionUser) msg.getExtendData()
+                    : JsonUtils.convertJson2Obj(JsonUtils.convertObj2Json(msg.getExtendData()), ChatSessionUser.class);
+            if (sessionUser == null || sessionUser.getContactId() == null) {
+                logger.warn("好友欢迎消息联系人信息无效，messageId={}", msg.getMessageId());
+                return;
+            }
+            msg.setMessageType(MessageTypeEnum.ADD_FRIEND.getType());
+            msg.setContactId(sessionUser.getContactId());
+            msg.setContactName(sessionUser.getContactName());
+        }
         receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg)));
     }
 }

@@ -7,13 +7,17 @@ import javax.annotation.Resource;
 import org.springframework.stereotype.Service;
 
 import com.easychat.entity.enums.PageSize;
+import com.easychat.entity.query.ChatSessionQuery;
 import com.easychat.entity.query.ChatMessageQuery;
 import com.easychat.entity.po.ChatMessage;
+import com.easychat.entity.po.ChatSession;
 import com.easychat.entity.vo.PaginationResultVO;
 import com.easychat.entity.query.SimplePage;
 import com.easychat.mappers.ChatMessageMapper;
+import com.easychat.mappers.ChatSessionMapper;
 import com.easychat.service.ChatMessageService;
 import com.easychat.utils.StringTools;
+import org.springframework.transaction.annotation.Transactional;
 
 
 /**
@@ -24,6 +28,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
 	@Resource
 	private ChatMessageMapper<ChatMessage, ChatMessageQuery> chatMessageMapper;
+
+	@Resource
+	private ChatSessionMapper<ChatSession, ChatSessionQuery> chatSessionMapper;
 
 	/**
 	 * 根据条件查询列表
@@ -62,6 +69,23 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 	@Override
 	public Integer add(ChatMessage bean) {
 		return this.chatMessageMapper.insert(bean);
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public Integer addAndUpdateSession(ChatMessage bean) {
+		if (this.chatSessionMapper.selectBySessionId(bean.getSessionId()) == null) {
+			throw new IllegalStateException("会话不存在");
+		}
+		Integer inserted = this.chatMessageMapper.insert(bean);
+		ChatSession session = new ChatSession();
+		session.setLastMessage(bean.getMessageContent());
+		session.setLastReceiveTime(bean.getSendTime());
+		Integer updated = this.chatSessionMapper.updateBySessionId(session, bean.getSessionId());
+		if (inserted == null || inserted != 1 || updated == null) {
+			throw new IllegalStateException("消息或会话预览保存失败");
+		}
+		return inserted;
 	}
 
 	/**

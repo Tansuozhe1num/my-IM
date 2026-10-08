@@ -32,6 +32,9 @@ public interface ChatMessageService {
 	 */
 	Integer add(ChatMessage bean);
 
+	/** Save a message and update its session preview as one transaction. */
+	Integer addAndUpdateSession(ChatMessage bean);
+
 	/**
 	 * 批量新增
 	 */

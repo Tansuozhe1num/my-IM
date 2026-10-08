@@ -68,9 +68,9 @@ electron . --profile=account-b
 ## 需要后端补充或调整
 
 1. **浏览器 WebSocket 鉴权**：客户端使用 `wss://host/ws?token=...` 连接，后端 Netty 已从握手 URI 的 query 参数读取并校验 token。
-2. **WebSocket 消息发送协议**：当前服务端 `channelRead0` 只刷新心跳，没有解析前端发送的 `MessageSendDto`、入库或投递。需要约定客户端发送 JSON 后的解析、保存、转发和回执。
+2. **WebSocket 消息发送协议**：客户端发送好友私聊 JSON（`messageType: 2`、`sessionId`、`contactId`、`contactType: 0`、`messageContent`、`clientMessageId`）。服务端会校验登录用户、好友关系和会话归属，保存消息并更新会话预览，再向发送方回执、向接收方投递。`clientMessageId` 仅用于前端去重，不写入消息表。
 3. **初始化推送协议**：`WsInitData` 已定义，但服务端尚未看到发送初始化消息的逻辑。建议连接成功后推送 `messageType: 0`，包含会话、历史消息和 `applyCount`。
 4. **文件上传**：当前客户端只展示附件按钮。若要支持图片、语音和文件，需要上传接口（返回可访问 URL、文件类型、大小和文件名），以及消息发送/下载地址。
-5. **会话写入与已读**：当前 `/chatSessionUser` 与 `/chatMessage` 是通用 CRUD，建议补充带权限校验的“发送消息、标记已读、删除会话”接口或明确前端可调用的字段和鉴权要求。
+5. **会话写入与已读**：好友通过申请时，服务端会创建双方会话、保存申请留言并通过 WebSocket 通知在线客户端；普通私聊消息也会原子更新消息和会话预览。已读、删除会话仍需单独的业务接口。
 
 接口返回统一按 `ResponseVO { status, code, info, data }` 处理，登录 token 暂存于浏览器 `localStorage`。

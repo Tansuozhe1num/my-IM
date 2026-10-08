@@ -15,14 +15,38 @@
     "desktop": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder"
   },
-  "dependencies": { "@vitejs/plugin-react": "latest", "vite": "latest", "react": "latest", "react-dom": "latest", "lucide-react": "latest" },
-  "devDependencies": { "concurrently": "latest", "electron": "latest", "electron-builder": "latest", "wait-on": "latest" },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "electron": "^44.7.0",
+    "electron-builder": "latest",
+    "wait-on": "^9.5.1"
+  },
   "build": {
     "appId": "com.easychat.desktop",
     "productName": "EasyChat",
     "asar": true,
-    "files": ["dist/**/*", "electron/**/*", "package.json"],
-    "win": { "target": ["nsis", "portable"] },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true }
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
   }
 }

@@ -15,6 +15,7 @@ import com.easychat.entity.vo.SearchVo;
 import com.easychat.exception.BusinessException;
 import com.easychat.mappers.*;
 import com.easychat.redis.redisComponent;
+import com.easychat.utils.CopyUtils;
 import com.easychat.utils.IdGenerator;
 import com.easychat.websocket.ChannelContextUtils;
 import com.easychat.websocket.messageHandle;
@@ -23,6 +24,8 @@ import org.apache.catalina.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.easychat.entity.vo.PaginationResultVO;
 import com.easychat.service.UserContactService;
@@ -286,9 +289,10 @@ public class UserContactServiceImpl implements UserContactService {
 
 		if (accept.equals(UserContactApplyEnum.Accept.getStatus())) {
 			this.addContact(apply.getApplyUserId(), apply.getReceiveUserId(), apply.getContactId(), apply.getContactType(), apply.getApplyInfo());
-		}
-
-		if (accept.equals(UserContactApplyEnum.Black.getStatus())) {
+			if (UserContactTypeEnum.USER.getType().equals(apply.getContactType())) {
+				createFriendSessionAndGreeting(apply);
+			}
+		} else if (accept.equals(UserContactApplyEnum.Black.getStatus())) {
 			UserContact contact = this.userContactMapper.selectByUserIdAndContactId(UserId, apply.getApplyUserId());
 			if (contact == null) {
 				contact = new UserContact();
@@ -306,6 +310,81 @@ public class UserContactServiceImpl implements UserContactService {
 			}
 			logger.info("新加黑名单关系 : (" + contact.getUserId() + " : " + contact.getContactId() + ")");
 		}
+	}
+
+	private void createFriendSessionAndGreeting(UserContactApply apply) {
+		String senderId = apply.getApplyUserId();
+		String receiverId = apply.getReceiveUserId();
+		String sessionId = StringTools.getChatSessionIdUser(new String[]{senderId, receiverId});
+		String greetingContent = StringTools.isEmpty(apply.getApplyInfo()) ? "你好，很高兴认识你" : apply.getApplyInfo();
+		UserInfo sender = this.userInfoMapper.selectByUserId(senderId);
+		UserInfo receiver = this.userInfoMapper.selectByUserId(receiverId);
+		if (sender == null || receiver == null) {
+			throw new BusinessException("联系人不存在，无法创建会话");
+		}
+
+		long sendTime = System.currentTimeMillis();
+		ChatSession chatSession = new ChatSession();
+		chatSession.setSessionId(sessionId);
+		chatSession.setLastMessage(greetingContent);
+		chatSession.setLastReceiveTime(sendTime);
+		this.chatSessionMapper.insertOrUpdate(chatSession);
+
+		ChatSessionUser senderSession = new ChatSessionUser();
+		senderSession.setUserId(senderId);
+		senderSession.setContactId(receiverId);
+		senderSession.setSessionId(sessionId);
+		senderSession.setContactName(receiver.getNickName());
+
+		ChatSessionUser receiverSession = new ChatSessionUser();
+		receiverSession.setUserId(receiverId);
+		receiverSession.setContactId(senderId);
+		receiverSession.setSessionId(sessionId);
+		receiverSession.setContactName(sender.getNickName());
+		this.chatSessionUserMapper.insertOrUpdateBatch(Arrays.asList(senderSession, receiverSession));
+
+		ChatMessage greeting = ChatMessage.builder()
+				.sessionId(sessionId)
+				.sendUserId(senderId)
+				.sendUserNickName(sender.getNickName())
+				.messageType(MessageTypeEnum.ADD_FRIEND.getType())
+				.sendTime(sendTime)
+				.messageContent(greetingContent)
+				.contactId(receiverId)
+				.contactType(UserContactTypeEnum.USER.getType())
+				.status(MessageStatusEnum.SENDED.getStatus())
+				.build();
+		this.chatMessageMapper.insert(greeting);
+
+		TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+			@Override
+			public void afterCommit() {
+				try {
+					redisComponent.addUser(senderId, receiverId);
+					redisComponent.addUser(receiverId, senderId);
+				} catch (Exception e) {
+					logger.warn("好友已建立，但更新 WebSocket 联系人缓存失败，senderId={}, receiverId={}", senderId, receiverId, e);
+				}
+
+				MessageSendDto receiverEvent = CopyUtils.copy(greeting, MessageSendDto.class);
+				receiverEvent.setExtendData(receiverSession);
+				try {
+					messageHandle.sendMsg(receiverEvent);
+				} catch (Exception e) {
+					logger.warn("好友欢迎消息通知接收方失败，messageId={}", greeting.getMessageId(), e);
+				}
+
+				MessageSendDto senderEvent = CopyUtils.copy(greeting, MessageSendDto.class);
+				senderEvent.setContactId(senderId);
+				senderEvent.setMessageType(MessageTypeEnum.ADD_FRIEND_SELF.getType());
+				senderEvent.setExtendData(senderSession);
+				try {
+					messageHandle.sendMsg(senderEvent);
+				} catch (Exception e) {
+					logger.warn("好友欢迎消息通知发送方失败，messageId={}", greeting.getMessageId(), e);
+				}
+			}
+		});
 	}
 
 	@Override

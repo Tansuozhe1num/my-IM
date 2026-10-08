@@ -32,7 +32,7 @@ public class messageDelayProducer {
         DelayMessageDto delayMessage = DelayMessageDto.builder()
                 .messageId(StringTools.generateSecureRandomString(7))
                 .delayTime(delayTime)
-                .retryTime(2)
+                .retryTime(0)
                 .topic(topic)
                 .message(message)
                 .status(mqMessageStatusEnum.Process.getStatus())
@@ -50,15 +50,20 @@ public class messageDelayProducer {
             return;
         }
 
+        boolean queued = false;
         for (int i = 0; i < 3; i++) {
             try {
                 delayedQueue.offer(JsonUtils.convertObj2Json(delayMessageDto), delayMessageDto.getDelayTime(), TimeUnit.MILLISECONDS);
+                queued = true;
                 break;
             } catch (Exception e) {
-                logger.warn("发送消息失败: messageID: {}, 重试第{}次", delayMessageDto.getMessageId(), i + 1);
+                logger.warn("发送消息失败: messageId={}, retry={}", delayMessageDto.getMessageId(), i + 1, e);
             }
         }
 
+        if (!queued) {
+            throw new IllegalStateException("无法将消息写入延迟队列: " + delayMessageDto.getMessageId());
+        }
         redisComponent.setMessageSend(delayMessageDto.getMessageId());
     }
 }
