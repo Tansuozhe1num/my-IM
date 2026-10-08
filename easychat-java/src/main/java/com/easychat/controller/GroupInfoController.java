@@ -4,6 +4,7 @@ import com.easychat.annotation.GlobalInterceptor;
 import com.easychat.entity.dto.TokenUserinfoDTO;
 import com.easychat.entity.enums.ResponseCodeEnum;
 import com.easychat.entity.enums.UserContactStatusEnum;
+import com.easychat.entity.enums.UserContactTypeEnum;
 import com.easychat.entity.po.GroupInfo;
 import com.easychat.entity.po.UserContact;
 import com.easychat.entity.query.UserContactQuery;
@@ -92,7 +93,9 @@ public class GroupInfoController extends ABaseController {
 
         UserContactQuery query = new UserContactQuery();
         query.setContactId(groupId);
+        query.setContactType(UserContactTypeEnum.Group.getType());
         query.setQueryUserInfo(true);
+        query.setQueryUserInfoByUserId(true);
         query.setOrderBy("create_time desc");
         query.setStatus(UserContactStatusEnum.FRIEND.getStatus());
         List<UserContact> listByParam = this.userContactService.findListByParam(query);

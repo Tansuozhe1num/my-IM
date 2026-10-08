@@ -1,12 +1,21 @@
 package com.easychat.entity.po;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import java.io.Serializable;
 
 
 /**
  * 会话用户
  */
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
 public class ChatSessionUser implements Serializable {
 
 
@@ -35,62 +44,6 @@ public class ChatSessionUser implements Serializable {
 	private String lastReceiveTime;
 
 	private Integer memberCount;
-
-	public String getLastReceiveTime() {
-		return lastReceiveTime;
-	}
-
-	public void setLastReceiveTime(String lastReceiveTime) {
-		this.lastReceiveTime = lastReceiveTime;
-	}
-
-	public Integer getMemberCount() {
-		return memberCount;
-	}
-
-	public void setMemberCount(Integer memberCount) {
-		this.memberCount = memberCount;
-	}
-
-	public String getLastMessage() {
-		return lastMessage;
-	}
-
-	public void setLastMessage(String lastMessage) {
-		this.lastMessage = lastMessage;
-	}
-
-	public void setUserId(String userId){
-		this.userId = userId;
-	}
-
-	public String getUserId(){
-		return this.userId;
-	}
-
-	public void setContactId(String contactId){
-		this.contactId = contactId;
-	}
-
-	public String getContactId(){
-		return this.contactId;
-	}
-
-	public void setSessionId(String sessionId){
-		this.sessionId = sessionId;
-	}
-
-	public String getSessionId(){
-		return this.sessionId;
-	}
-
-	public void setContactName(String contactName){
-		this.contactName = contactName;
-	}
-
-	public String getContactName(){
-		return this.contactName;
-	}
 
 	@Override
 	public String toString (){

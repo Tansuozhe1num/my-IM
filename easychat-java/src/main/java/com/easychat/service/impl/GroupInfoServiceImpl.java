@@ -2,28 +2,32 @@ package com.easychat.service.impl;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import javax.xml.crypto.Data;
 
 import com.easychat.entity.config.Appconfig;
 import com.easychat.entity.constants.Constants;
+import com.easychat.entity.dto.MessageSendDto;
 import com.easychat.entity.dto.SysSettingDto;
 import com.easychat.entity.enums.*;
-import com.easychat.entity.po.UserContact;
-import com.easychat.entity.query.UserContactQuery;
+import com.easychat.entity.po.*;
+import com.easychat.entity.query.*;
 import com.easychat.exception.BusinessException;
-import com.easychat.mappers.UserContactMapper;
+import com.easychat.mappers.*;
+import com.easychat.utils.CopyUtils;
+import com.easychat.websocket.ChannelContextUtils;
+import com.easychat.websocket.messageHandle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import com.easychat.entity.query.GroupInfoQuery;
-import com.easychat.entity.po.GroupInfo;
 import com.easychat.entity.vo.PaginationResultVO;
-import com.easychat.entity.query.SimplePage;
-import com.easychat.mappers.GroupInfoMapper;
 import com.easychat.service.GroupInfoService;
 import com.easychat.utils.StringTools;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +41,8 @@ import com.easychat.redis.redisComponent;
 @Service("groupInfoService")
 public class GroupInfoServiceImpl implements GroupInfoService {
 
+	private static final Logger logger = LoggerFactory.getLogger(GroupInfoServiceImpl.class);
+
 	@Resource
 	private GroupInfoMapper<GroupInfo, GroupInfoQuery> groupInfoMapper;
 
@@ -45,6 +51,21 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 
 	@Resource
 	private UserContactMapper userContactMapper;
+
+	@Resource
+	private ChatSessionMapper<ChatSession, ChatSessionQuery> chatSessionMapper;
+
+	@Resource
+	private ChatSessionUserMapper<ChatSessionUser, ChatSessionUserQuery> chatSessionUserMapper;
+
+	@Resource
+	private ChatMessageMapper<ChatMessage, ChatMessageQuery> chatMessageMapper;
+
+	@Resource
+	private messageHandle messageHandle;
+
+	@Resource
+	private ChannelContextUtils channelContextUtils;
 
 	@Resource
 	private Appconfig appconfig;
@@ -154,10 +175,16 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 	@Override
 	@Transactional(rollbackFor = Exception.class)
 	public void saveGroup(GroupInfo groupInfo, MultipartFile avator, MultipartFile avatorCover) throws IOException {
+		if (groupInfo == null || StringTools.isEmpty(groupInfo.getGroupOwnerId())
+				|| StringTools.isEmpty(groupInfo.getGroupName())
+				|| JoinTypeEnum.getByType(groupInfo.getJoinType()) == null) {
+			throw new BusinessException(ResponseCodeEnum.CODE_600);
+		}
 		// 群组未存在
 		if (StringTools.isEmpty(groupInfo.getGroupId())) {
 			GroupInfoQuery query = new GroupInfoQuery();
 			query.setGroupOwnerId(groupInfo.getGroupOwnerId());
+			query.setStatus(GroupInfoStatusEnum.Normal.getStatus());
 			Integer cnt = this.groupInfoMapper.selectCount(query);
 			SysSettingDto sysSettingDTO = redisComponent.getSysSettingDTO();
 
@@ -165,12 +192,9 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 				throw new BusinessException("创建群组过多, 最多" + sysSettingDTO.getMaxGroupCount() + "个群组");
 			}
 
-			if (avator == null) {
-				throw new BusinessException(ResponseCodeEnum.CODE_600);
-			}
-
 			groupInfo.setCreateTime(new Date());
 			groupInfo.setGroupId("G" + StringTools.generateSecureRandomString(8));
+			groupInfo.setStatus(GroupInfoStatusEnum.Normal.getStatus());
 			this.groupInfoMapper.insert(groupInfo);
 
 			UserContact contact = new UserContact();
@@ -182,11 +206,61 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 			contact.setLastUpdateTime(new Date());
 			this.userContactMapper.insert(contact);
 
-			// TODO 创建对话， 发送消息
+			String sessionId = StringTools.getChatSessionIdGroup(groupInfo.getGroupId());
+			ChatSession chatSession = ChatSession.builder()
+					.sessionId(sessionId)
+					.lastMessage(MessageTypeEnum.GROUP_CREATE.getInitMessage())
+					.lastReceiveTime(new Date().getTime())
+					.build();
+			this.chatSessionMapper.insertOrUpdate(chatSession);
+
+			ChatSessionUser chatSessionUser = ChatSessionUser.builder()
+					.userId(groupInfo.getGroupOwnerId())
+					.contactId(groupInfo.getGroupId())
+					.sessionId(sessionId)
+					.lastMessage(MessageTypeEnum.GROUP_CREATE.getInitMessage())
+					.contactName(groupInfo.getGroupName())
+					.lastReceiveTime(String.valueOf(System.currentTimeMillis()))
+					.memberCount(1)
+					.build();
+			this.chatSessionUserMapper.insertOrUpdate(chatSessionUser);
+
+			ChatMessage chatMessage = ChatMessage.builder()
+					.messageType(MessageTypeEnum.GROUP_CREATE.getType())
+					.sessionId(sessionId)
+					.sendUserId(groupInfo.getGroupOwnerId())
+					.sendUserNickName(groupInfo.getGroupOwnerId())
+					.sendTime(new Date().getTime())
+					.messageContent(MessageTypeEnum.GROUP_CREATE.getInitMessage())
+					.contactId(groupInfo.getGroupId())
+					.contactType(UserContactTypeEnum.Group.getType())
+					.status(MessageStatusEnum.SENDED.getStatus())
+					.build();
+			chatMessageMapper.insert(chatMessage);
+
+			MessageSendDto messageSendDto = CopyUtils.copy(chatMessage, MessageSendDto.class);
+			messageSendDto.setExtendData(chatSessionUser);
+			afterCommit(() -> {
+				try {
+					redisComponent.addUser(groupInfo.getGroupOwnerId(), groupInfo.getGroupId());
+				} catch (Exception e) {
+					logger.warn("群聊已创建，但更新 Redis 联系人缓存失败，groupId={}", groupInfo.getGroupId(), e);
+				}
+				try {
+					channelContextUtils.addUser2Group(groupInfo.getGroupOwnerId(), groupInfo.getGroupId());
+				} catch (Exception e) {
+					logger.warn("群聊已创建，但更新本机群组频道失败，groupId={}", groupInfo.getGroupId(), e);
+				}
+				try {
+					messageHandle.sendMsg(messageSendDto);
+				} catch (Exception e) {
+					logger.warn("群聊已创建，但实时通知失败，groupId={}", groupInfo.getGroupId(), e);
+				}
+			});
 
 		} else {
 			GroupInfo curGroupinfo = this.groupInfoMapper.selectByGroupId(groupInfo.getGroupId());
-			if (!curGroupinfo.getGroupOwnerId().equals(groupInfo.getGroupOwnerId())) {
+			if (curGroupinfo == null || !curGroupinfo.getGroupOwnerId().equals(groupInfo.getGroupOwnerId())) {
 				throw new BusinessException("修改者不是群主");
 			}
 			this.groupInfoMapper.updateByGroupId(groupInfo, groupInfo.getGroupId());
@@ -217,8 +291,22 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 			throw new BusinessException(ResponseCodeEnum.CODE_600);
 		}
 
-		List<GroupInfo> groupInfo = this.groupInfoMapper.selectByGroupOwnerId(UserID);
-		return groupInfo;
+		UserContactQuery contacts = new UserContactQuery();
+		contacts.setUserId(UserID);
+		contacts.setContactType(UserContactTypeEnum.Group.getType());
+		contacts.setStatus(UserContactStatusEnum.FRIEND.getStatus());
+		List<UserContact> memberships = this.userContactMapper.selectList(contacts);
+		if (memberships == null || memberships.isEmpty()) {
+			return new ArrayList<>();
+		}
+		GroupInfoQuery query = new GroupInfoQuery();
+		List<String> groupIds = new ArrayList<>();
+		for (UserContact membership : memberships) {
+			groupIds.add(membership.getContactId());
+		}
+		query.setGroupIdList(groupIds);
+		query.setStatus(GroupInfoStatusEnum.Normal.getStatus());
+		return this.groupInfoMapper.selectList(query);
 	}
 
 	@Override
@@ -226,6 +314,8 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 		GroupInfo groupInfo = getGroupInfoNormal(UserId, groupId);
 		UserContactQuery query = new UserContactQuery();
 		query.setContactId(groupId);
+		query.setContactType(UserContactTypeEnum.Group.getType());
+		query.setStatus(UserContactStatusEnum.FRIEND.getStatus());
 		Integer cnt = this.userContactMapper.selectCount(query);
 		groupInfo.setMemberCount(cnt);
 		return groupInfo;
@@ -234,7 +324,7 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 
 	public GroupInfo getGroupInfoNormal(String UserId, String groupId) {
 		UserContact contact = (UserContact) this.userContactMapper.selectByUserIdAndContactId(UserId, groupId);
-		if (contact == null) {
+		if (contact == null || !UserContactStatusEnum.FRIEND.getStatus().equals(contact.getStatus())) {
 			throw new BusinessException("非本群组用户");
 		}
 		GroupInfo groupInfo = this.groupInfoMapper.selectByGroupId(groupId);
@@ -242,5 +332,18 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 			throw new BusinessException("群聊已解散");
 		}
 		return groupInfo;
+	}
+
+	private void afterCommit(Runnable action) {
+		if (TransactionSynchronizationManager.isSynchronizationActive()) {
+			TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+				@Override
+				public void afterCommit() {
+					action.run();
+				}
+			});
+		} else {
+			action.run();
+		}
 	}
 }

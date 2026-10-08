@@ -128,15 +128,18 @@ public class ChannelContextUtils {
     }
 
     public void add2Group(String groupId, Channel channel) {
-        ChannelGroup group = GROUP_CONTEXT_LIST.get(groupId);
-        if (group == null) {
-            group = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
-            GROUP_CONTEXT_LIST.put(groupId, group);
-        }
         if (channel == null) {
             return;
         }
-        group.add(channel);
+        GROUP_CONTEXT_LIST.computeIfAbsent(groupId, key -> new DefaultChannelGroup(GlobalEventExecutor.INSTANCE)).add(channel);
+    }
+
+    public void addUser2Group(String userId, String groupId) {
+        Channel channel = USER_CONTEXT_MAP.get(userId);
+        if (channel == null) {
+            return;
+        }
+        add2Group(groupId, channel);
     }
 
     public void removeContext(Channel channel) {
@@ -162,7 +165,18 @@ public class ChannelContextUtils {
     }
 
     public void sendMessage(MessageSendDto msg) {
-        UserContactTypeEnum userContactTypeEnum = UserContactTypeEnum.getByPrefix(msg.getContactId());
+		if (msg == null || StringTools.isEmpty(msg.getContactId())) {
+			logger.warn("忽略缺少联系人的 WebSocket 消息，messageId={}", msg == null ? null : msg.getMessageId());
+			return;
+		}
+		UserContactTypeEnum userContactTypeEnum = UserContactTypeEnum.getByPrefix(msg.getContactId());
+		if (userContactTypeEnum == null) {
+			userContactTypeEnum = UserContactTypeEnum.getByType(msg.getContactType());
+		}
+		if (userContactTypeEnum == null) {
+			logger.warn("忽略无法识别联系人类型的 WebSocket 消息，contactId={}, messageId={}", msg.getContactId(), msg.getMessageId());
+			return;
+		}
         switch (userContactTypeEnum) {
             case USER:
                 send2User(msg);
@@ -202,7 +216,7 @@ public class ChannelContextUtils {
         if (receiveChan == null) {
             return;
         }
-        receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg.getMessageContent())));
+        receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg)));
     }
 
     public void sendMsg(MessageSendDto msg, String receive) {

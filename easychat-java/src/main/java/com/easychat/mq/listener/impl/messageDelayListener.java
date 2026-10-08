@@ -65,7 +65,6 @@ public class messageDelayListener implements DelayListener {
 
                     logger.info("收到延迟消息: {}", delayMessageDto);
 
-                    // JSON enters the queue as a JSONObject, so convert the nested payload explicitly.
                     MessageSendDto message = JsonUtils.convertJson2Obj(
                             JsonUtils.convertObj2Json(delayMessageDto.getMessage()),
                             MessageSendDto.class

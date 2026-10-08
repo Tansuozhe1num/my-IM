@@ -76,7 +76,7 @@ public interface UserContactService {
 
 	SearchVo searchFriends(String UserId, String ContactId);
 
-	void applyAdd(String UserId, String ContactId, UserContactTypeEnum ContactType, String ApplyInfo);
+	boolean applyAdd(String UserId, String ContactId, UserContactTypeEnum ContactType, String ApplyInfo);
 
 	void SolveApply(String UserId, String ContactId, Integer accept);
 

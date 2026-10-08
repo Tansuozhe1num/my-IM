@@ -19,8 +19,6 @@ import com.easychat.utils.CopyUtils;
 import com.easychat.utils.IdGenerator;
 import com.easychat.websocket.ChannelContextUtils;
 import com.easychat.websocket.messageHandle;
-import io.netty.channel.ChannelHandler;
-import org.apache.catalina.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -67,6 +65,9 @@ public class UserContactServiceImpl implements UserContactService {
 
 	@Resource
 	private messageHandle messageHandle;
+
+	@Resource
+	private ChannelContextUtils channelContextUtils;
 	/**
 	 * 根据条件查询列表
 	 */
@@ -192,12 +193,13 @@ public class UserContactServiceImpl implements UserContactService {
 			userInfoList.add(userInfo);
 		} else { // 查询群组信息
 			GroupInfo groupInfo = this.groupInfoMapper.selectByGroupId(ContactId);
-			if (groupInfo == null) {
-				throw new BusinessException("群组不存在");
+			if (groupInfo == null || GroupInfoStatusEnum.DisSolution.getStatus().equals(groupInfo.getStatus())) {
+				throw new BusinessException("群组不存在或已解散");
 			}
 			UserContactQuery query = new UserContactQuery();
 			query.setContactId(ContactId);
 			query.setContactType(UserContactTypeEnum.Group.getType());
+			query.setStatus(UserContactStatusEnum.FRIEND.getStatus());
 			List<UserContact> infos = this.userContactMapper.selectList(query);
 			for (UserContact info : infos) {
 				UserInfo k = this.userInfoMapper.selectByUserId(info.getUserId());
@@ -210,54 +212,78 @@ public class UserContactServiceImpl implements UserContactService {
 	}
 
 	@Override
-	public void applyAdd(String UserId, String ContactId, UserContactTypeEnum ContactType, String ApplyInfo) {
-		if (ContactType == null) {
+	@Transactional(rollbackFor = Exception.class)
+	public boolean applyAdd(String UserId, String ContactId, UserContactTypeEnum ContactType, String ApplyInfo) {
+		if (StringTools.isEmpty(UserId) || StringTools.isEmpty(ContactId) || ContactType == null) {
 			throw new BusinessException(ResponseCodeEnum.CODE_600);
 		}
-
-		UserContact contact = this.userContactMapper.selectByUserIdAndContactId(UserId, ContactId);
-		if (contact != null && contact.getStatus().equals(UserContactStatusEnum.FRIEND.getStatus())) {
-			throw new BusinessException("已经是好友或者已经在群组中");
-		}
-		if (contact != null && contact.getStatus().equals(UserContactStatusEnum.BLACKLIST_BE.getStatus())) {
-			throw new BusinessException("被拉黑");
-		}
-
-		UserContactApply apply = this.userContactApplyMapper.selectByApplyUserIdAndReceiveUserIdAndContactId(UserId, ContactId, ContactId);
-		boolean needToSendWs = (apply == null || !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus()));
-		if (apply != null) {
-			apply.setLastApplyTime(System.currentTimeMillis());
-			apply.setStatus(UserContactApplyEnum.Progress.getStatus());
-			apply.setApplyInfo(ApplyInfo);
-			this.userContactApplyMapper.updateByApplyId(apply, apply.getApplyId());
-		} else {
-			String ReceiveId = ContactId;
-			if (ContactType.equals(UserContactTypeEnum.Group)) {
-				GroupInfo groupinfo = this.groupInfoMapper.selectByGroupId(ContactId);
-				ReceiveId = groupinfo.getGroupOwnerId();
+		String ReceiveId = ContactId;
+		if (UserContactTypeEnum.USER.equals(ContactType)) {
+			if (UserId.equals(ContactId) || this.userInfoMapper.selectByUserId(ContactId) == null) {
+				throw new BusinessException("用户不存在");
 			}
+			UserContact relation = this.userContactMapper.selectByUserIdAndContactId(UserId, ContactId);
+			if (relation != null && UserContactStatusEnum.FRIEND.getStatus().equals(relation.getStatus())) {
+				throw new BusinessException("已经是好友");
+			}
+			if (relation != null && UserContactStatusEnum.BLACKLIST_BE.getStatus().equals(relation.getStatus())) {
+				throw new BusinessException("被对方拉黑");
+			}
+		} else {
+			GroupInfo group = this.groupInfoMapper.selectByGroupId(ContactId);
+			if (group == null || GroupInfoStatusEnum.DisSolution.getStatus().equals(group.getStatus())) {
+				throw new BusinessException("群组不存在或已解散");
+			}
+			UserContact membership = this.userContactMapper.selectByUserIdAndContactId(UserId, ContactId);
+			if (membership != null && UserContactStatusEnum.FRIEND.getStatus().equals(membership.getStatus())) {
+				throw new BusinessException("已经在群组中");
+			}
+			if (JoinTypeEnum.JOIN.getType().equals(group.getJoinType())) {
+				this.addContact(UserId, group.getGroupOwnerId(), ContactId, ContactType.getType(), ApplyInfo);
+				createGroupSessionAndGreeting(UserId, ContactId);
+				return false;
+			}
+			ReceiveId = group.getGroupOwnerId();
+		}
+
+		UserContactApply apply = this.userContactApplyMapper.selectByApplyUserIdAndReceiveUserIdAndContactId(UserId, ReceiveId, ContactId);
+		if (apply == null) {
 			apply = new UserContactApply();
 			apply.setApplyUserId(UserId);
 			apply.setReceiveUserId(ReceiveId);
-			apply.setContactType(UserContactTypeEnum.USER.getType());
-			apply.setApplyInfo(ApplyInfo);
 			apply.setContactId(ContactId);
-			apply.setLastApplyTime((new Date()).getTime());
-			apply.setStatus(UserContactApplyEnum.Progress.getStatus());
-
+		} else if (UserContactApplyEnum.Progress.getStatus().equals(apply.getStatus())) {
+			return true;
+		}
+		apply.setContactType(ContactType.getType());
+		apply.setApplyInfo(ApplyInfo);
+		apply.setLastApplyTime(System.currentTimeMillis());
+		apply.setStatus(UserContactApplyEnum.Progress.getStatus());
+		if (apply.getApplyId() == null) {
 			this.userContactApplyMapper.insert(apply);
+		} else {
+			this.userContactApplyMapper.updateByApplyId(apply, apply.getApplyId());
 		}
 
-		if (needToSendWs) {
-			MessageSendDto messageSendDto = MessageSendDto.builder()
-					.messageType(MessageTypeEnum.CONTACT_APPLY.getType())
-					.messageId(IdGenerator.nextIdLong())
-					.messageContent(ApplyInfo)
-					.contactId(ContactId)
-					.build();
-
-			messageHandle.sendMsg(messageSendDto);
-		}
+		UserInfo applicant = this.userInfoMapper.selectByUserId(UserId);
+		MessageSendDto<UserContactApply> event = MessageSendDto.<UserContactApply>builder()
+				.messageType(MessageTypeEnum.CONTACT_APPLY.getType())
+				.messageId(IdGenerator.nextIdLong())
+				.messageContent(ApplyInfo)
+				.sendUserId(UserId)
+				.sendUserNickName(applicant == null ? UserId : applicant.getNickName())
+				.contactId(ReceiveId)
+				.extendData(apply)
+				.build();
+		Integer applyId = apply.getApplyId();
+		afterCommit(() -> {
+			try {
+				messageHandle.sendMsg(event);
+			} catch (Exception e) {
+				logger.warn("申请已保存，但实时通知失败，applyId={}", applyId, e);
+			}
+		});
+		return true;
 	}
 
 	@Override
@@ -279,6 +305,16 @@ public class UserContactServiceImpl implements UserContactService {
 				|| !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus())) {
 			throw new BusinessException("申请已经失效");
 		}
+		if (UserContactTypeEnum.Group.getType().equals(apply.getContactType())) {
+			GroupInfo group = this.groupInfoMapper.selectByGroupId(apply.getContactId());
+			if (group == null || !UserId.equals(group.getGroupOwnerId())
+					|| GroupInfoStatusEnum.DisSolution.getStatus().equals(group.getStatus())) {
+				throw new BusinessException("仅当前群主可以处理该申请");
+			}
+			if (UserContactApplyEnum.Black.getStatus().equals(accept)) {
+				throw new BusinessException("群申请仅支持接受或拒绝");
+			}
+		}
 		apply.setStatus(accept);
 		apply.setLastApplyTime((new Date()).getTime());
 
@@ -291,6 +327,8 @@ public class UserContactServiceImpl implements UserContactService {
 			this.addContact(apply.getApplyUserId(), apply.getReceiveUserId(), apply.getContactId(), apply.getContactType(), apply.getApplyInfo());
 			if (UserContactTypeEnum.USER.getType().equals(apply.getContactType())) {
 				createFriendSessionAndGreeting(apply);
+			} else {
+				createGroupSessionAndGreeting(apply);
 			}
 		} else if (accept.equals(UserContactApplyEnum.Black.getStatus())) {
 			UserContact contact = this.userContactMapper.selectByUserIdAndContactId(UserId, apply.getApplyUserId());
@@ -387,16 +425,105 @@ public class UserContactServiceImpl implements UserContactService {
 		});
 	}
 
+	private void createGroupSessionAndGreeting(UserContactApply apply) {
+		createGroupSessionAndGreeting(apply.getApplyUserId(), apply.getContactId());
+	}
+
+	private void createGroupSessionAndGreeting(String userId, String groupId) {
+		GroupInfo group = this.groupInfoMapper.selectByGroupId(groupId);
+		UserInfo member = this.userInfoMapper.selectByUserId(userId);
+		if (group == null || member == null) {
+			throw new BusinessException("群组或用户不存在，无法创建会话");
+		}
+
+		long sendTime = System.currentTimeMillis();
+		String sessionId = StringTools.getChatSessionIdGroup(groupId);
+		String content = String.format(MessageTypeEnum.ADD_GROUP.getInitMessage(), member.getNickName());
+		ChatSession session = new ChatSession();
+		session.setSessionId(sessionId);
+		session.setLastMessage(content);
+		session.setLastReceiveTime(sendTime);
+		this.chatSessionMapper.insertOrUpdate(session);
+
+		UserContactQuery membersQuery = new UserContactQuery();
+		membersQuery.setContactId(groupId);
+		membersQuery.setContactType(UserContactTypeEnum.Group.getType());
+		membersQuery.setStatus(UserContactStatusEnum.FRIEND.getStatus());
+		ChatSessionUser newMemberSession = ChatSessionUser.builder()
+				.userId(userId)
+				.contactId(groupId)
+				.sessionId(sessionId)
+				.contactName(group.getGroupName())
+				.memberCount(this.userContactMapper.selectCount(membersQuery))
+				.build();
+		this.chatSessionUserMapper.insertOrUpdate(newMemberSession);
+
+		ChatMessage message = ChatMessage.builder()
+				.sessionId(sessionId)
+				.messageType(MessageTypeEnum.ADD_GROUP.getType())
+				.messageContent(content)
+				.sendUserId(userId)
+				.sendUserNickName(member.getNickName())
+				.sendTime(sendTime)
+				.contactId(groupId)
+				.contactType(UserContactTypeEnum.Group.getType())
+				.status(MessageStatusEnum.SENDED.getStatus())
+				.build();
+		this.chatMessageMapper.insert(message);
+
+		MessageSendDto event = CopyUtils.copy(message, MessageSendDto.class);
+		event.setExtendData(newMemberSession);
+		afterCommit(() -> {
+			try {
+				redisComponent.addUser(userId, groupId);
+			} catch (Exception e) {
+				logger.warn("已加入群聊，但更新 Redis 联系人缓存失败，userId={}, groupId={}", userId, groupId, e);
+			}
+			try {
+				channelContextUtils.addUser2Group(userId, groupId);
+			} catch (Exception e) {
+				logger.warn("已加入群聊，但更新本机群组频道失败，userId={}, groupId={}", userId, groupId, e);
+			}
+			try {
+				messageHandle.sendMsg(event);
+			} catch (Exception e) {
+				logger.warn("群成员已加入，但实时通知失败，userId={}, groupId={}", userId, groupId, e);
+			}
+		});
+	}
+
+	private void afterCommit(Runnable action) {
+		if (TransactionSynchronizationManager.isSynchronizationActive()) {
+			TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+				@Override
+				public void afterCommit() {
+					action.run();
+				}
+			});
+		} else {
+			action.run();
+		}
+	}
+
 	@Override
 	public void addContact(String applyUserId, String receiveUserID, String ContactId, Integer ContactType, String ApplyInfo) {
 		if (UserContactTypeEnum.Group.getType().equals(ContactType)) {
+			GroupInfo group = this.groupInfoMapper.selectByGroupId(ContactId);
+			if (group == null || GroupInfoStatusEnum.DisSolution.getStatus().equals(group.getStatus())) {
+				throw new BusinessException("群组不存在或已解散");
+			}
+			UserContact existing = this.userContactMapper.selectByUserIdAndContactId(applyUserId, ContactId);
+			if (existing != null && UserContactStatusEnum.FRIEND.getStatus().equals(existing.getStatus())) {
+				throw new BusinessException("已经在群组中");
+			}
 			SysSettingDto sysSettingDTO = redisComponent.getSysSettingDTO();
 			UserContactQuery query = new UserContactQuery();
 			query.setContactId(ContactId);
+			query.setContactType(UserContactTypeEnum.Group.getType());
 			query.setStatus(UserContactStatusEnum.FRIEND.getStatus());
 			Integer count = this.userContactMapper.selectCount(query);
 
-			if (count >= sysSettingDTO.getMaxGroupMemberCount()) {
+			if (sysSettingDTO.getMaxGroupMemberCount() != null && count >= sysSettingDTO.getMaxGroupMemberCount()) {
 				throw new BusinessException("群聊人数已满");
 			}
 		}
@@ -464,6 +591,7 @@ public class UserContactServiceImpl implements UserContactService {
 
 				GroupInfoQuery groupQuery = new GroupInfoQuery();
 				groupQuery.setGroupIdList(groupIds);
+				groupQuery.setStatus(GroupInfoStatusEnum.Normal.getStatus());
 				List<GroupInfo> groupInfos = this.groupInfoMapper.selectList(groupQuery);
 				Map<String, GroupInfo> groupInfoMap = new HashMap<>();
 				for (GroupInfo groupInfo : groupInfos) {
@@ -473,6 +601,7 @@ public class UserContactServiceImpl implements UserContactService {
 				UserContactQuery groupUserQuery = new UserContactQuery();
 				groupUserQuery.setContactType(ContactType.getType());
 				groupUserQuery.setContactIdList(groupIds);
+				groupUserQuery.setStatus(UserContactStatusEnum.FRIEND.getStatus());
 				groupUserQuery.setQueryUserInfo(true);
 				groupUserQuery.setQueryUserInfoByUserId(true);
 				List<UserContact> groupUserInfos = this.userContactMapper.selectList(groupUserQuery);
@@ -483,8 +612,12 @@ public class UserContactServiceImpl implements UserContactService {
 
 				List<GroupInfoVO> gpinfos = new ArrayList<>();
 				for (UserContact info : userContacts) {
+					GroupInfo groupInfo = groupInfoMap.get(info.getContactId());
+					if (groupInfo == null) {
+						continue;
+					}
 					GroupInfoVO groupinfoVO = new GroupInfoVO();
-					groupinfoVO.setGroupInfo(groupInfoMap.get(info.getContactId()));
+					groupinfoVO.setGroupInfo(groupInfo);
 					groupinfoVO.setUserContactList(groupMemberMap.getOrDefault(info.getContactId(), Collections.emptyList()));
 					gpinfos.add(groupinfoVO);
 				}

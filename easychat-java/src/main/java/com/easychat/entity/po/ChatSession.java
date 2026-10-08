@@ -1,12 +1,21 @@
 package com.easychat.entity.po;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import java.io.Serializable;
 
 
 /**
  * 会话信息
  */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class  ChatSession implements Serializable {
 
 
@@ -24,31 +33,6 @@ public class  ChatSession implements Serializable {
 	 * 最后接受消息时间毫秒
 	 */
 	private Long lastReceiveTime;
-
-
-	public void setSessionId(String sessionId){
-		this.sessionId = sessionId;
-	}
-
-	public String getSessionId(){
-		return this.sessionId;
-	}
-
-	public void setLastMessage(String lastMessage){
-		this.lastMessage = lastMessage;
-	}
-
-	public String getLastMessage(){
-		return this.lastMessage;
-	}
-
-	public void setLastReceiveTime(Long lastReceiveTime){
-		this.lastReceiveTime = lastReceiveTime;
-	}
-
-	public Long getLastReceiveTime(){
-		return this.lastReceiveTime;
-	}
 
 	@Override
 	public String toString (){

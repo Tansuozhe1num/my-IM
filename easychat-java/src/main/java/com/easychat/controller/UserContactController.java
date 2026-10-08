@@ -59,8 +59,8 @@ public class UserContactController extends ABaseController {
         }
         UserContactTypeEnum type = UserContactTypeEnum.getByType(ContactType);
         ApplyInfo = ApplyInfo == null ? "申请添加" : ApplyInfo;
-        this.userContactService.applyAdd(userinfoDTO.getUserId(), ContactId, type, ApplyInfo);
-        return getSuccessResponseVO("");
+        boolean pending = this.userContactService.applyAdd(userinfoDTO.getUserId(), ContactId, type, ApplyInfo);
+        return getSuccessResponseVO(pending);
     }
 
     @RequestMapping("/solveApply")

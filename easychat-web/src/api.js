@@ -28,6 +28,12 @@ export const api = {
   applyAdd: (id, type, info) => request(`/contact/applyAdd?ContactId=${encodeURIComponent(id)}&ContactType=${type}&ApplyInfo=${encodeURIComponent(info || '申请添加')}`, { method: 'POST' }),
   solveApply: (applyId, accept) => request(`/contact/solveApply?applyId=${encodeURIComponent(applyId)}&accept=${accept}`, { method: 'POST' }),
   groups: () => request('/group/loadmygroup', { method: 'POST' }),
+  createGroup: values => {
+    const body = new FormData()
+    Object.entries(values).forEach(([key, value]) => value != null && body.append(key, value))
+    return request('/group/savegroup', { method: 'POST', body })
+  },
+  groupInfo: id => request(`/group/getgroupinfo?groupId=${encodeURIComponent(id)}`, { method: 'POST' }),
   sessions: userId => request(`/chatSessionUser/loadDataList?userId=${encodeURIComponent(userId)}&getLastMessage=true&pageNo=1&pageSize=50`, { method: 'POST' }),
   messages: sessionId => request(`/chatMessage/loadDataList?sessionId=${encodeURIComponent(sessionId)}&pageNo=1&pageSize=50&orderBy=send_time asc`, { method: 'POST' }),
 }

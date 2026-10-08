@@ -64,7 +64,7 @@
 		<if test="query.getLastMessage">
 			,d.last_message, d.last_receive_time,
 			case when SUBSTRING(c.contact_id, 1, 1) = 'G'
-				then (select count(1) from user_contact uc where uc.contact_id = c.contact_id)
+				then (select count(1) from user_contact uc where uc.contact_id = c.contact_id and uc.contact_type = 1 and uc.status = 1)
 				else 0
 			end as memberCount
 		</if>
