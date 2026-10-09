@@ -76,7 +76,10 @@ public class ChannelContextUtils {
             }
         }
 
-        USER_CONTEXT_MAP.put(UserId, channel);
+        Channel previous = USER_CONTEXT_MAP.put(UserId, channel);
+        if (previous != null && previous != channel) {
+            previous.close();
+        }
         redisComponent.setUserHeartBeat(UserId);
 
         UserInfo userInfo = new UserInfo();
@@ -148,7 +151,10 @@ public class ChannelContextUtils {
         if (StringTools.isEmpty(userId)) {
             return;
         }
-        USER_CONTEXT_MAP.remove(userId);
+        GROUP_CONTEXT_LIST.values().forEach(group -> group.remove(channel));
+        if (!USER_CONTEXT_MAP.remove(userId, channel)) {
+            return;
+        }
         try {
             redisComponent.deleteUserHeartBeat(userId);
         } catch (Exception e) {
@@ -192,7 +198,13 @@ public class ChannelContextUtils {
         if (ContactId == null) {
             return;
         }
-        sendMsg(msg, ContactId);
+        if (MessageTypeEnum.CONTACT_APPLY.getType().equals(msg.getMessageType())
+                || MessageTypeEnum.CONTACT_NAME_UPDATE.getType().equals(msg.getMessageType())) {
+            MessageSendDto outgoing = JsonUtils.convertJson2Obj(JsonUtils.convertObj2Json(msg), MessageSendDto.class);
+            sendMsg(outgoing, ContactId);
+        } else {
+            sendMsg(msg, ContactId);
+        }
         // 强制下线
         if (MessageTypeEnum.FORCE_OFF_LINE.getType().equals(msg.getMessageType())) {
             String userId = msg.getContactId();
@@ -227,6 +239,11 @@ public class ChannelContextUtils {
         if (receiveChan == null) {
             return;
         }
+        if (MessageTypeEnum.CONTACT_APPLY.getType().equals(msg.getMessageType())
+                || MessageTypeEnum.CONTACT_NAME_UPDATE.getType().equals(msg.getMessageType())) {
+            receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg)));
+            return;
+        }
         if (!MessageTypeEnum.ADD_FRIEND_SELF.getType().equals(msg.getMessageType())) {
             msg.setContactId(msg.getSendUserId());
             msg.setContactName(msg.getSendUserNickName());
@@ -247,5 +264,16 @@ public class ChannelContextUtils {
             msg.setContactName(sessionUser.getContactName());
         }
         receiveChan.writeAndFlush(new TextWebSocketFrame(JsonUtils.convertObj2Json(msg)));
+    }
+
+    public boolean outUser(String userId) {
+        redisComponent.outUser(userId);
+        Channel channel = USER_CONTEXT_MAP.get(userId);
+        if (channel == null) {
+            return false;
+        }
+        channel.close();
+        USER_CONTEXT_MAP.remove(userId, channel);
+        return true;
     }
 }

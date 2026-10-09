@@ -4,10 +4,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
 
 import com.easychat.entity.config.Appconfig;
 import com.easychat.entity.constants.Constants;
@@ -19,6 +20,7 @@ import com.easychat.entity.query.*;
 import com.easychat.exception.BusinessException;
 import com.easychat.mappers.*;
 import com.easychat.utils.CopyUtils;
+import com.easychat.utils.IdGenerator;
 import com.easychat.websocket.ChannelContextUtils;
 import com.easychat.websocket.messageHandle;
 import org.slf4j.Logger;
@@ -45,6 +47,9 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 
 	@Resource
 	private GroupInfoMapper<GroupInfo, GroupInfoQuery> groupInfoMapper;
+
+	@Resource
+	private UserInfoMapper<UserInfo, UserInfoQuery> userInfoMapper;
 
 	@Resource
 	private redisComponent redisComponent;
@@ -180,6 +185,10 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 				|| JoinTypeEnum.getByType(groupInfo.getJoinType()) == null) {
 			throw new BusinessException(ResponseCodeEnum.CODE_600);
 		}
+		groupInfo.setGroupName(groupInfo.getGroupName().trim());
+		if (StringTools.isEmpty(groupInfo.getGroupName())) {
+			throw new BusinessException("群名称不能为空");
+		}
 		// 群组未存在
 		if (StringTools.isEmpty(groupInfo.getGroupId())) {
 			GroupInfoQuery query = new GroupInfoQuery();
@@ -225,11 +234,12 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 					.build();
 			this.chatSessionUserMapper.insertOrUpdate(chatSessionUser);
 
+			UserInfo owner = this.userInfoMapper.selectByUserId(groupInfo.getGroupOwnerId());
 			ChatMessage chatMessage = ChatMessage.builder()
 					.messageType(MessageTypeEnum.GROUP_CREATE.getType())
 					.sessionId(sessionId)
 					.sendUserId(groupInfo.getGroupOwnerId())
-					.sendUserNickName(groupInfo.getGroupOwnerId())
+					.sendUserNickName(owner == null ? groupInfo.getGroupOwnerId() : owner.getNickName())
 					.sendTime(new Date().getTime())
 					.messageContent(MessageTypeEnum.GROUP_CREATE.getInitMessage())
 					.contactId(groupInfo.getGroupId())
@@ -237,7 +247,6 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 					.status(MessageStatusEnum.SENDED.getStatus())
 					.build();
 			chatMessageMapper.insert(chatMessage);
-
 			MessageSendDto messageSendDto = CopyUtils.copy(chatMessage, MessageSendDto.class);
 			messageSendDto.setExtendData(chatSessionUser);
 			afterCommit(() -> {
@@ -260,16 +269,51 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 
 		} else {
 			GroupInfo curGroupinfo = this.groupInfoMapper.selectByGroupId(groupInfo.getGroupId());
-			if (curGroupinfo == null || !curGroupinfo.getGroupOwnerId().equals(groupInfo.getGroupOwnerId())) {
+			if (curGroupinfo == null || !curGroupinfo.getGroupOwnerId().equals(groupInfo.getGroupOwnerId())
+					|| GroupInfoStatusEnum.DisSolution.getStatus().equals(curGroupinfo.getStatus())) {
 				throw new BusinessException("修改者不是群主");
 			}
-			this.groupInfoMapper.updateByGroupId(groupInfo, groupInfo.getGroupId());
-			// TODO 更新相关表冗余信息
+			GroupInfo update = new GroupInfo();
+			update.setGroupName(groupInfo.getGroupName().trim());
+			update.setGroupNotice(groupInfo.getGroupNotice());
+			update.setJoinType(groupInfo.getJoinType());
+			this.groupInfoMapper.updateByGroupId(update, groupInfo.getGroupId());
 
-			// TODO: 修改群昵称发送ws消息
+			boolean nameChanged = !curGroupinfo.getGroupName().equals(update.getGroupName());
+			if (nameChanged) {
+				ChatSessionUser sessionUpdate = ChatSessionUser.builder().contactName(update.getGroupName()).build();
+				ChatSessionUserQuery sessionQuery = ChatSessionUserQuery.builder().contactId(groupInfo.getGroupId()).build();
+				this.chatSessionUserMapper.updateByParam(sessionUpdate, sessionQuery);
+			}
+			Map<String, Object> groupUpdate = new HashMap<>();
+			groupUpdate.put("groupId", groupInfo.getGroupId());
+			groupUpdate.put("groupName", update.getGroupName());
+			groupUpdate.put("groupNotice", update.getGroupNotice());
+			groupUpdate.put("joinType", update.getJoinType());
+			if (avator != null && !avator.isEmpty()) groupUpdate.put("avatarVersion", System.currentTimeMillis());
+			MessageSendDto<Map<String, Object>> event = MessageSendDto.<Map<String, Object>>builder()
+					.messageId(IdGenerator.nextIdLong())
+					.messageType(MessageTypeEnum.CONTACT_NAME_UPDATE.getType())
+					.contactType(UserContactTypeEnum.Group.getType())
+					.contactId(groupInfo.getGroupId())
+					.contactName(update.getGroupName())
+					.messageContent(nameChanged ? "群名称已更新为：" + update.getGroupName() : "群资料已更新")
+					.extendData(groupUpdate)
+					.sendUserId(groupInfo.getGroupOwnerId())
+					.sendUserNickName(update.getGroupName())
+					.sendTime(System.currentTimeMillis())
+					.sessionId(StringTools.getChatSessionIdGroup(groupInfo.getGroupId()))
+					.build();
+			afterCommit(() -> {
+				try {
+					messageHandle.sendMsg(event);
+				} catch (Exception e) {
+					logger.warn("群资料已更新，但实时通知失败，groupId={}", groupInfo.getGroupId(), e);
+				}
+			});
 		}
 
-		if (avator == null) {
+		if ((avator == null || avator.isEmpty()) && (avatorCover == null || avatorCover.isEmpty())) {
 			return;
 		}
 
@@ -279,8 +323,16 @@ public class GroupInfoServiceImpl implements GroupInfoService {
 			targetFileFolder.mkdirs();
 		}
 		String filePath = targetFileFolder.getPath() + "/" + groupInfo.getGroupId() + Constants.IMAGE_SUFFER;
-		avator.transferTo(new File(filePath));
-		if (avatorCover != null) {
+		if (avator != null && !avator.isEmpty()) {
+			if (!"image/png".equalsIgnoreCase(avator.getContentType())) {
+				throw new BusinessException("群头像请使用 PNG 图片");
+			}
+			avator.transferTo(new File(filePath));
+		}
+		if (avatorCover != null && !avatorCover.isEmpty()) {
+			if (!"image/png".equalsIgnoreCase(avatorCover.getContentType())) {
+				throw new BusinessException("群封面请使用 PNG 图片");
+			}
 			avatorCover.transferTo(new File(filePath + Constants.COVER_IMAGE_SUFFER));
 		}
 	}

@@ -1,43 +1,44 @@
 package com.easychat.service.impl;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import javax.annotation.Resource;
 
 import com.easychat.entity.config.Appconfig;
+import com.easychat.entity.constants.Constants;
+import com.easychat.entity.dto.MessageSendDto;
 import com.easychat.entity.dto.TokenUserinfoDTO;
-import com.easychat.entity.enums.BeautyAccountStatusEnum;
-import com.easychat.entity.enums.UserContactStatusEnum;
-import com.easychat.entity.enums.UserStatusEnum;
-import com.easychat.entity.po.UserContact;
-import com.easychat.entity.po.UserInfoBeauty;
-import com.easychat.entity.query.UserContactQuery;
-import com.easychat.entity.query.UserInfoBeautyQuery;
+import com.easychat.entity.enums.*;
+import com.easychat.entity.po.*;
+import com.easychat.entity.query.*;
 import com.easychat.entity.vo.UserInfoVo;
 import com.easychat.exception.BusinessException;
-import com.easychat.mappers.UserContactMapper;
-import com.easychat.mappers.UserInfoBeautyMapper;
+import com.easychat.mappers.*;
 import com.easychat.redis.redisComponent;
 import com.easychat.service.UserContactService;
 import com.easychat.utils.CopyUtils;
+import com.easychat.websocket.ChannelContextUtils;
+import com.easychat.websocket.messageHandle;
 import org.apache.commons.lang3.ArrayUtils;
-import org.apache.ibatis.reflection.ArrayUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import com.easychat.entity.enums.PageSize;
-import com.easychat.entity.query.UserInfoQuery;
-import com.easychat.entity.po.UserInfo;
 import com.easychat.entity.vo.PaginationResultVO;
-import com.easychat.entity.query.SimplePage;
-import com.easychat.mappers.UserInfoMapper;
 import com.easychat.service.UserInfoService;
 import com.easychat.utils.StringTools;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 
 /**
@@ -63,6 +64,15 @@ public class UserInfoServiceImpl implements UserInfoService {
 
 	@Resource
 	private redisComponent redisComponent;
+
+	@Resource
+	private ChannelContextUtils channelContextUtils;
+
+	@Resource
+	private ChatSessionUserMapper<ChatSessionUser, ChatSessionUserQuery> chatSessionUserMapper;
+
+	@Resource
+	private messageHandle messageHandle;
 
 	private static final Logger logger = LoggerFactory.getLogger(UserInfoServiceImpl.class);
 
@@ -277,13 +287,121 @@ public class UserInfoServiceImpl implements UserInfoService {
 	}
 
 	public void updatePasswd(String UserID, String passwd) {
-		if (passwd == null || passwd.equals("")) {
+		if (StringTools.isEmpty(passwd)) {
 			throw new BusinessException("密码格式不好");
 		}
-		UserInfo userInfo = this.userInfoMapper.selectByUserId(UserID);
-		UserInfoQuery query = new UserInfoQuery();
-		query.setUserId(UserID);
-		this.userInfoMapper.updateByParam(userInfo, query);
-		// TODO: ws踢下线用户
+		UserInfo update = new UserInfo();
+		update.setPassword(StringTools.encodeMD5(passwd));
+		if (this.userInfoMapper.selectByUserId(UserID) == null) {
+			throw new BusinessException("用户不存在");
+		}
+		this.userInfoMapper.updateByUserId(update, UserID);
+		channelContextUtils.outUser(UserID);
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public void updateUserInfo(String userId, UserInfo userInfo, MultipartFile avatar) throws IOException {
+		if (StringTools.isEmpty(userId) || userInfo == null) {
+			throw new BusinessException(ResponseCodeEnum.CODE_600);
+		}
+		UserInfo dbInfo = this.userInfoMapper.selectByUserId(userId);
+		if (dbInfo == null) {
+			throw new BusinessException("用户不存在");
+		}
+
+		UserInfo update = new UserInfo();
+		String nickname = userInfo.getNickName();
+		if (nickname != null) {
+			nickname = nickname.trim();
+			if (nickname.isEmpty() || nickname.length() > 40) {
+				throw new BusinessException("昵称不能为空且不能超过40个字符");
+			}
+			update.setNickName(nickname);
+		}
+		update.setPersonalSignature(userInfo.getPersonalSignature());
+		if (userInfo.getSex() != null) {
+			if (userInfo.getSex() != 0 && userInfo.getSex() != 1) {
+				throw new BusinessException(ResponseCodeEnum.CODE_600);
+			}
+			update.setSex(userInfo.getSex());
+		}
+		update.setAreaName(userInfo.getAreaName());
+		update.setAreaCode(userInfo.getAreaCode());
+		if (update.getNickName() == null && update.getPersonalSignature() == null && update.getSex() == null
+				&& update.getAreaName() == null && update.getAreaCode() == null && (avatar == null || avatar.isEmpty())) {
+			throw new BusinessException("没有可更新的资料");
+		}
+
+		if (avatar != null && !avatar.isEmpty()) {
+			if (!"image/png".equalsIgnoreCase(avatar.getContentType())) {
+				throw new BusinessException("头像请使用 PNG 图片");
+			}
+			File targetFolder = new File(appconfig.getProjectFolder() + Constants.FILE_PATH + Constants.AVATOR_FILE_PATH);
+			if (!targetFolder.exists() && !targetFolder.mkdirs()) {
+				throw new IOException("无法创建头像目录");
+			}
+			avatar.transferTo(new File(targetFolder, userId + Constants.IMAGE_SUFFER));
+		}
+		boolean hasProfileFields = update.getNickName() != null || update.getPersonalSignature() != null
+				|| update.getSex() != null || update.getAreaName() != null || update.getAreaCode() != null;
+		if (hasProfileFields) {
+			this.userInfoMapper.updateByUserId(update, userId);
+		}
+
+		String newNickname = update.getNickName();
+		if (newNickname != null && !Objects.equals(dbInfo.getNickName(), newNickname)) {
+			ChatSessionUser sessionUpdate = ChatSessionUser.builder().contactName(newNickname).build();
+			ChatSessionUserQuery sessionQuery = ChatSessionUserQuery.builder().contactId(userId).build();
+			this.chatSessionUserMapper.updateByParam(sessionUpdate, sessionQuery);
+		}
+
+		Map<String, Object> profileUpdate = new HashMap<>();
+		profileUpdate.put("userId", userId);
+		if (newNickname != null) profileUpdate.put("nickName", newNickname);
+		if (update.getPersonalSignature() != null) profileUpdate.put("personalSignature", update.getPersonalSignature());
+		if (update.getSex() != null) profileUpdate.put("sex", update.getSex());
+		if (update.getAreaName() != null) profileUpdate.put("areaName", update.getAreaName());
+		if (update.getAreaCode() != null) profileUpdate.put("areaCode", update.getAreaCode());
+		if (avatar != null && !avatar.isEmpty()) profileUpdate.put("avatarVersion", System.currentTimeMillis());
+
+		UserContactQuery contactQuery = new UserContactQuery();
+		contactQuery.setUserId(userId);
+		contactQuery.setContactType(UserContactTypeEnum.USER.getType());
+		contactQuery.setStatus(UserContactStatusEnum.FRIEND.getStatus());
+		List<String> recipients = new ArrayList<>();
+		recipients.add(userId);
+		for (UserContact contact : userContactMapper.selectList(contactQuery)) {
+			if (!StringTools.isEmpty(contact.getContactId())) recipients.add(contact.getContactId());
+		}
+		String displayNickname = newNickname == null ? dbInfo.getNickName() : newNickname;
+		afterCommit(() -> recipients.forEach(recipient -> {
+			MessageSendDto<Map<String, Object>> event = MessageSendDto.<Map<String, Object>>builder()
+					.messageId(com.easychat.utils.IdGenerator.nextIdLong())
+					.messageType(MessageTypeEnum.CONTACT_NAME_UPDATE.getType())
+					.contactType(UserContactTypeEnum.USER.getType())
+					.contactId(recipient)
+					.sendUserId(userId)
+					.sendUserNickName(displayNickname)
+					.messageContent("个人资料已更新")
+					.extendData(profileUpdate)
+					.sendTime(System.currentTimeMillis())
+					.build();
+			try {
+				messageHandle.sendMsg(event);
+			} catch (Exception e) {
+				logger.warn("个人资料已更新，但实时通知失败，userId={}, recipient={}", userId, recipient, e);
+			}
+		}));
+	}
+
+	private void afterCommit(Runnable action) {
+		if (TransactionSynchronizationManager.isSynchronizationActive()) {
+			TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+				@Override public void afterCommit() { action.run(); }
+			});
+		} else {
+			action.run();
+		}
 	}
 }

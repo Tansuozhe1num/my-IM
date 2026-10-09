@@ -28,11 +28,18 @@ export const api = {
   applyAdd: (id, type, info) => request(`/contact/applyAdd?ContactId=${encodeURIComponent(id)}&ContactType=${type}&ApplyInfo=${encodeURIComponent(info || '申请添加')}`, { method: 'POST' }),
   solveApply: (applyId, accept) => request(`/contact/solveApply?applyId=${encodeURIComponent(applyId)}&accept=${accept}`, { method: 'POST' }),
   groups: () => request('/group/loadmygroup', { method: 'POST' }),
-  createGroup: values => {
+  saveGroup: values => {
     const body = new FormData()
     Object.entries(values).forEach(([key, value]) => value != null && body.append(key, value))
     return request('/group/savegroup', { method: 'POST', body })
   },
+  updateUserInfo: values => {
+    const body = new FormData()
+    Object.entries(values).forEach(([key, value]) => value != null && body.append(key, value))
+    return request('/user/updateUserInfo', { method: 'POST', body })
+  },
+  avatarUrl: (id, version) => API_BASE + '/file/avatar/' + encodeURIComponent(id) + (version ? '?v=' + version : ''),
+  createGroup: values => api.saveGroup(values),
   groupInfo: id => request(`/group/getgroupinfo?groupId=${encodeURIComponent(id)}`, { method: 'POST' }),
   sessions: userId => request(`/chatSessionUser/loadDataList?userId=${encodeURIComponent(userId)}&getLastMessage=true&pageNo=1&pageSize=50`, { method: 'POST' }),
   messages: sessionId => request(`/chatMessage/loadDataList?sessionId=${encodeURIComponent(sessionId)}&pageNo=1&pageSize=50&orderBy=send_time asc`, { method: 'POST' }),
@@ -41,10 +48,63 @@ export const api = {
 export function connectSocket(token, onMessage, onState) {
   // Native browser WebSocket cannot add custom headers, so the token is part of the handshake URL.
   const url = `${WS_BASE}?token=${encodeURIComponent(token)}`
-  const socket = new WebSocket(url)
-  socket.onopen = () => onState?.('open')
-  socket.onclose = () => onState?.('closed')
-  socket.onerror = () => onState?.('error')
-  socket.onmessage = event => { try { onMessage?.(JSON.parse(event.data)) } catch { /* heartbeat or non-JSON frame */ } }
-  return socket
+  let socket = null
+  let retryTimer = null
+  let retryCount = 0
+  let disposed = false
+
+  const scheduleReconnect = () => {
+    if (disposed || retryTimer !== null) return
+    const delay = Math.min(30000, 500 * 2 ** Math.min(retryCount++, 6))
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null
+      connect()
+    }, Math.round(delay * (0.8 + Math.random() * 0.4)))
+  }
+
+  const connect = () => {
+    if (disposed) return
+    try {
+      socket = new WebSocket(url)
+    } catch {
+      onState?.('error')
+      scheduleReconnect()
+      return
+    }
+    const current = socket
+    current.onopen = () => {
+      if (socket !== current) return
+      retryCount = 0
+      onState?.('open')
+    }
+    current.onclose = () => {
+      if (socket !== current) return
+      if (!disposed) onState?.('closed')
+      scheduleReconnect()
+    }
+    current.onerror = () => {
+      if (socket === current) onState?.('error')
+      current.close()
+    }
+    current.onmessage = event => {
+      try { onMessage?.(JSON.parse(event.data)) } catch { /* heartbeat or non-JSON frame */ }
+    }
+  }
+
+  const connection = {
+    get readyState() { return socket?.readyState ?? WebSocket.CLOSED },
+    send(data) {
+      if (socket?.readyState !== WebSocket.OPEN) throw new Error('WebSocket is not connected')
+      socket.send(data)
+    },
+    close() {
+      disposed = true
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
+      retryTimer = null
+      socket?.close()
+    },
+  }
+
+  connect()
+  return connection
 }

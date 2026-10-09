@@ -61,7 +61,7 @@ public class UserContactServiceImpl implements UserContactService {
 	@Resource
 	private ChatMessageMapper<ChatMessage, ChatMessageQuery> chatMessageMapper;
 
-	private static final Logger logger = LoggerFactory.getLogger(UserInfoServiceImpl.class);
+	private static final Logger logger = LoggerFactory.getLogger(UserContactServiceImpl.class);
 
 	@Resource
 	private messageHandle messageHandle;
@@ -265,14 +265,18 @@ public class UserContactServiceImpl implements UserContactService {
 			this.userContactApplyMapper.updateByApplyId(apply, apply.getApplyId());
 		}
 
+		final String receiveId = ReceiveId;
+		final UserContactApply savedApply = apply;
 		UserInfo applicant = this.userInfoMapper.selectByUserId(UserId);
 		MessageSendDto<UserContactApply> event = MessageSendDto.<UserContactApply>builder()
 				.messageType(MessageTypeEnum.CONTACT_APPLY.getType())
 				.messageId(IdGenerator.nextIdLong())
 				.messageContent(ApplyInfo)
+				.sendTime(System.currentTimeMillis())
 				.sendUserId(UserId)
 				.sendUserNickName(applicant == null ? UserId : applicant.getNickName())
-				.contactId(ReceiveId)
+				.contactId(receiveId)
+				.contactType(UserContactTypeEnum.USER.getType())
 				.extendData(apply)
 				.build();
 		Integer applyId = apply.getApplyId();
@@ -281,6 +285,25 @@ public class UserContactServiceImpl implements UserContactService {
 				messageHandle.sendMsg(event);
 			} catch (Exception e) {
 				logger.warn("申请已保存，但实时通知失败，applyId={}", applyId, e);
+			}
+			if (!UserContactTypeEnum.Group.equals(ContactType) || UserId.equals(receiveId)) {
+				return;
+			}
+			MessageSendDto<UserContactApply> applicantEvent = MessageSendDto.<UserContactApply>builder()
+					.messageId(event.getMessageId())
+					.messageType(event.getMessageType())
+					.messageContent(event.getMessageContent())
+					.sendTime(event.getSendTime())
+					.sendUserId(UserId)
+					.sendUserNickName(event.getSendUserNickName())
+					.contactId(UserId)
+					.contactType(UserContactTypeEnum.USER.getType())
+					.extendData(savedApply)
+					.build();
+			try {
+				messageHandle.sendMsg(applicantEvent);
+			} catch (Exception e) {
+				logger.warn("申请已保存，但通知申请人失败，applyId={}", applyId, e);
 			}
 		});
 		return true;
@@ -302,7 +325,7 @@ public class UserContactServiceImpl implements UserContactService {
 		UserContactApply apply = this.userContactApplyMapper.selectByApplyId(applyId);
 		if (apply == null
 				|| !UserId.equals(apply.getReceiveUserId())
-				|| !apply.getStatus().equals(UserContactApplyEnum.Progress.getStatus())) {
+				|| !UserContactApplyEnum.Progress.getStatus().equals(apply.getStatus())) {
 			throw new BusinessException("申请已经失效");
 		}
 		if (UserContactTypeEnum.Group.getType().equals(apply.getContactType())) {
@@ -321,7 +344,9 @@ public class UserContactServiceImpl implements UserContactService {
 		UserContactApplyQuery query = new UserContactApplyQuery();
 		query.setApplyId(apply.getApplyId());
 		query.setStatus(UserContactApplyEnum.Progress.getStatus());
-		this.userContactApplyMapper.updateByParam(apply, query);
+		if (this.userContactApplyMapper.updateByParam(apply, query) == 0) {
+			throw new BusinessException("申请已被处理");
+		}
 
 		if (accept.equals(UserContactApplyEnum.Accept.getStatus())) {
 			this.addContact(apply.getApplyUserId(), apply.getReceiveUserId(), apply.getContactId(), apply.getContactType(), apply.getApplyInfo());
@@ -348,6 +373,45 @@ public class UserContactServiceImpl implements UserContactService {
 			}
 			logger.info("新加黑名单关系 : (" + contact.getUserId() + " : " + contact.getContactId() + ")");
 		}
+
+		UserInfo resolver = this.userInfoMapper.selectByUserId(UserId);
+		long resolvedAt = System.currentTimeMillis();
+		Long resolutionMessageId = IdGenerator.nextIdLong();
+		String resolverName = resolver == null ? UserId : resolver.getNickName();
+		MessageSendDto<UserContactApply> resolution = MessageSendDto.<UserContactApply>builder()
+				.messageType(MessageTypeEnum.CONTACT_APPLY.getType())
+				.messageId(resolutionMessageId)
+				.messageContent(UserContactApplyEnum.Accept.getStatus().equals(accept) ? "申请已通过" : "申请已处理")
+				.sendTime(resolvedAt)
+				.sendUserId(UserId)
+				.sendUserNickName(resolverName)
+				.contactId(apply.getApplyUserId())
+				.contactType(UserContactTypeEnum.USER.getType())
+				.extendData(apply)
+				.build();
+		MessageSendDto<UserContactApply> resolverUpdate = MessageSendDto.<UserContactApply>builder()
+				.messageType(MessageTypeEnum.CONTACT_APPLY.getType())
+				.messageId(resolutionMessageId)
+				.messageContent(resolution.getMessageContent())
+				.sendTime(resolvedAt)
+				.sendUserId(UserId)
+				.sendUserNickName(resolverName)
+				.contactId(UserId)
+				.contactType(UserContactTypeEnum.USER.getType())
+				.extendData(apply)
+				.build();
+		afterCommit(() -> {
+			try {
+				messageHandle.sendMsg(resolution);
+			} catch (Exception e) {
+				logger.warn("申请已处理，但结果通知申请人失败，applyId={}", apply.getApplyId(), e);
+			}
+			try {
+				messageHandle.sendMsg(resolverUpdate);
+			} catch (Exception e) {
+				logger.warn("申请已处理，但未能同步刷新处理方，applyId={}", apply.getApplyId(), e);
+			}
+		});
 	}
 
 	private void createFriendSessionAndGreeting(UserContactApply apply) {

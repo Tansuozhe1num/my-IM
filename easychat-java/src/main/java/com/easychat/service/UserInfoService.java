@@ -1,5 +1,6 @@
 package com.easychat.service;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -8,6 +9,7 @@ import com.easychat.entity.query.UserInfoQuery;
 import com.easychat.entity.po.UserInfo;
 import com.easychat.entity.vo.PaginationResultVO;
 import com.easychat.entity.vo.UserInfoVo;
+import org.springframework.web.multipart.MultipartFile;
 
 import javax.validation.constraints.Email;
 import javax.validation.constraints.NotEmpty;
@@ -99,4 +101,6 @@ public interface UserInfoService {
 	UserInfoVo login(String email, String password);
 
 	void updatePasswd(String UserID, String Passwd);
+
+	void updateUserInfo(String userId, UserInfo userInfo, MultipartFile avator) throws IOException;
 }

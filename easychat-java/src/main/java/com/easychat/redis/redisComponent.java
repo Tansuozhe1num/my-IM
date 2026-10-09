@@ -63,6 +63,16 @@ public class redisComponent {
         return true;
     }
 
+    public boolean outUser(String userId) {
+        String token = (String) redisUtils.get(Constants.REDIS_KEY_WS_TOKEN_USERID + userId);
+        if (token == null) {
+            return false;
+        }
+        redisUtils.delete(Constants.REDIS_KEY_WS_TOKEN + token);
+        redisUtils.delete(Constants.REDIS_KEY_WS_TOKEN_USERID + userId);
+        return true;
+    }
+
     public void cleanUserContact(String userId) {
         redisUtils.delete(Constants.REDIS_CONTACT_LIST + userId);
     }

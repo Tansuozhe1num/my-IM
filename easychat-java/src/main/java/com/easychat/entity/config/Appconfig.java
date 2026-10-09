@@ -21,7 +21,7 @@ public class Appconfig {
     }
 
     public String getProjectFolder() {
-        if (StringTools.isEmpty(projectFolder) && !projectFolder.endsWith("/")) {
+        if (!StringTools.isEmpty(projectFolder) && !projectFolder.endsWith("/") && !projectFolder.endsWith("\\")) {
             projectFolder = projectFolder + "/";
         }
         return projectFolder;

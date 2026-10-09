@@ -6,7 +6,7 @@ public class Constants {
 
     public static final String REDIS_CHECK_Heart_Beat = "easychat:user:heartbeat:";
 
-    public static final Long REDIS_Heart_Beat = 6L;
+    public static final Long REDIS_Heart_Beat = 30L;
 
     public static final String REDIS_KEY_WS_TOKEN = "easychat:ws:token:";
 
