@@ -33,5 +33,8 @@ public class Constants {
     public static final String REDIS_MQ_ERROR_MESSAGE = "easy:chat:error:message:id";
     public static final String REDIS_MQ_EXTEND_MESSAGE = "easy:chat:extend:message:id";
 
+    public static final String REDIS_CHAT_CLIENT_MESSAGE = "easy:chat:client-message:";
+    public static final String REDIS_CHAT_SEND_LOCK = "easy:chat:send-lock:";
+
     public static final Integer ONE_DAY = 60 * 60 * 24;
 }

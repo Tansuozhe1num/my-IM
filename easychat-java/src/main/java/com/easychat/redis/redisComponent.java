@@ -2,6 +2,7 @@ package com.easychat.redis;
 
 import com.easychat.entity.constants.Constants;
 import com.easychat.entity.dto.DelayMessageDto;
+import com.easychat.entity.dto.MessageSendDto;
 import com.easychat.entity.dto.SysSettingDto;
 import com.easychat.entity.dto.TokenUserinfoDTO;
 import com.easychat.utils.JsonUtils;
@@ -101,6 +102,25 @@ public class redisComponent {
 
     public Integer getMessageSend(String messageId) {
         return (Integer) redisUtils.get(Constants.REDIS_MQ_MESSAGE_ONLY_MARK + messageId);
+    }
+
+    public MessageSendDto getCachedChatMessage(String userId, String clientMessageId) {
+        String key = Constants.REDIS_CHAT_CLIENT_MESSAGE + userId + ":" + clientMessageId;
+        Object value = redisUtils.get(key);
+        if (!(value instanceof String)) {
+            return null;
+        }
+        try {
+            return JsonUtils.convertJson2Obj((String) value, MessageSendDto.class);
+        } catch (Exception e) {
+            redisUtils.delete(key);
+            return null;
+        }
+    }
+
+    public void cacheChatMessage(String userId, String clientMessageId, MessageSendDto message) {
+        String key = Constants.REDIS_CHAT_CLIENT_MESSAGE + userId + ":" + clientMessageId;
+        redisUtils.setex(key, JsonUtils.convertObj2Json(message), 24 * 60 * 60);
     }
 
     public void saveExtendMqMessage(DelayMessageDto msg) {

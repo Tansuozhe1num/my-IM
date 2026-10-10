@@ -3,8 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { api, connectSocket } from './api'
 import { Search, Plus, MessageCircle, Users, Compass, Settings, Smile, Paperclip, Mic, Send, UserPlus, MoreHorizontal, LogOut, RefreshCw, X, Check, ShieldOff, ChevronLeft, Mail, MapPin, CalendarDays } from 'lucide-react'
 import './styles.css'
+import './chat-messaging.css'
 
 const initials = value => (value || '?').trim().slice(0, 1).toUpperCase()
+const CHAT_EMOJIS = ['😀', '😂', '🥲', '😍', '👍', '🙏', '🎉', '❤️', '🤔', '👏', '😭', '✨']
 const timeText = value => value ? new Date(Number(value) || value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
 const sessionTime = value => Number(value) || Date.parse(value) || 0
 const normalizeId = value => value == null ? value : String(value)
@@ -23,10 +25,10 @@ const normalizeMessage = value => {
     extendData: extendData && typeof extendData === 'object' ? normalizeSession(extendData) : extendData,
   }
 }
-const messageKey = value => value?.messageId != null
-  ? `id:${value.messageId}`
-  : value?.clientMessageId
-    ? `client:${value.clientMessageId}`
+const messageKey = value => value?.clientMessageId
+    ? `client:${value.sendUserId || ''}:${value.clientMessageId}`
+    : value?.messageId != null
+      ? `id:${value.messageId}`
     : `fallback:${value?.sessionId || ''}:${value?.sendUserId || ''}:${value?.sendTime || ''}:${value?.messageContent || ''}`
 const mergeMessages = (...lists) => {
   const merged = new Map()
@@ -154,7 +156,8 @@ function ProfileDialog({ user, onClose, onSaved }) {
 }
 
 function App() {
-  const [user, setUser] = useState(null); const [loading, setLoading] = useState(!!localStorage.getItem('easychat-token')); const [section, setSection] = useState('chats'); const [contacts, setContacts] = useState([]); const [groups, setGroups] = useState([]); const [applications, setApplications] = useState([]); const [sessions, setSessions] = useState([]); const [active, setActive] = useState(null); const [showApplications, setShowApplications] = useState(false); const [showCreateGroup, setShowCreateGroup] = useState(false); const [showProfile, setShowProfile] = useState(false); const [editingGroup, setEditingGroup] = useState(null); const [processingApply, setProcessingApply] = useState(null); const [messages, setMessages] = useState([]); const [search, setSearch] = useState(''); const [searchResult, setSearchResult] = useState(null); const [composer, setComposer] = useState(''); const [notice, setNotice] = useState(''); const [socketState, setSocketState] = useState('offline'); const [contactDetails, setContactDetails] = useState(null); const socketRef = useRef(null); const selectionRef = useRef(''); const pendingMessagesRef = useRef(new Map()); const activeRef = useRef(active); activeRef.current = active
+  const [user, setUser] = useState(null); const [loading, setLoading] = useState(!!localStorage.getItem('easychat-token')); const [section, setSection] = useState('chats'); const [contacts, setContacts] = useState([]); const [groups, setGroups] = useState([]); const [applications, setApplications] = useState([]); const [sessions, setSessions] = useState([]); const [active, setActive] = useState(null); const [showApplications, setShowApplications] = useState(false); const [showCreateGroup, setShowCreateGroup] = useState(false); const [showProfile, setShowProfile] = useState(false); const [showEmojiPicker, setShowEmojiPicker] = useState(false); const [editingGroup, setEditingGroup] = useState(null); const [processingApply, setProcessingApply] = useState(null); const [messages, setMessages] = useState([]); const [search, setSearch] = useState(''); const [searchResult, setSearchResult] = useState(null); const [composer, setComposer] = useState(''); const [notice, setNotice] = useState(''); const [socketState, setSocketState] = useState('offline'); const [contactDetails, setContactDetails] = useState(null); const socketRef = useRef(null); const selectionRef = useRef(''); const pendingMessagesRef = useRef(new Map()); const activeRef = useRef(active); const messageScrollRef = useRef(null); activeRef.current = active
+  const pendingMessageKey = clientMessageId => `${user?.userId || ''}:${clientMessageId}`
   const applicationRevisionRef = useRef(0)
   const dataRevisionRef = useRef(0)
   const loadRevisionRef = useRef(0)
@@ -298,15 +301,23 @@ function App() {
         }
         return
       }
-      if (message?.status === 2) {
-        const failedMessage = pendingMessagesRef.current.get(message.clientMessageId)
-        if (message.clientMessageId) pendingMessagesRef.current.delete(message.clientMessageId)
-        if (failedMessage && activeRef.current?.sessionId === failedMessage.sessionId) setComposer(current => current || failedMessage.content)
-        setNotice(message.messageContent || '消息发送失败')
+      if (Number(message?.status) === 2) {
+        const failedMessage = pendingMessagesRef.current.get(pendingMessageKey(message.clientMessageId))
+        if (failedMessage) {
+          failedMessage.message = { ...failedMessage.message, status: 2, error: message.messageContent || '消息发送失败' }
+          if (activeRef.current?.sessionId === failedMessage.sessionId) {
+            setMessages(old => mergeMessages(old, [failedMessage.message]))
+          }
+        }
+        setNotice(message.messageContent || '消息发送失败，可点击消息重试')
         return
       }
       if (!message?.sessionId || !message?.messageContent) return
-      if (message.clientMessageId) pendingMessagesRef.current.delete(message.clientMessageId)
+      const isOwnMessage = message.sendUserId === user.userId
+      const pendingMessage = isOwnMessage && message.clientMessageId
+        ? pendingMessagesRef.current.get(pendingMessageKey(message.clientMessageId))
+        : null
+      if (pendingMessage) pendingMessagesRef.current.delete(pendingMessageKey(message.clientMessageId))
 
       if (message.messageType === 9 && message.contactId?.startsWith('G')) {
         const memberSession = message.extendData
@@ -334,7 +345,8 @@ function App() {
         return
       }
       ++dataRevisionRef.current
-      setMessages(old => mergeMessages(old, [message]))
+      const settledMessage = { ...message, status: 1 }
+      setMessages(old => mergeMessages(old, [settledMessage]))
       const sessionData = message.extendData?.sessionId ? {
         ...message.extendData,
         contactType: message.extendData.contactId?.startsWith('G') ? 1 : 0,
@@ -361,6 +373,9 @@ function App() {
             : item)
         return updated.sort((a, b) => sessionTime(b.lastReceiveTime) - sessionTime(a.lastReceiveTime))
       })
+      if (pendingMessage?.sessionId === message.sessionId) {
+        setActive(old => old?.sessionId === message.sessionId ? { ...old, ...sessionData, sessionId: message.sessionId } : old)
+      }
     }, state => {
       setSocketState(state)
       if (state === 'open') {
@@ -378,7 +393,13 @@ function App() {
       ws.close()
     }
   }, [user?.userId])
-  const activeTitle = active?.contactName || active?.name || '选择一个聊天'; const currentMessages = active?.sessionId ? messages.filter(m => m.sessionId === active.sessionId) : []
+  const activeTitle = active?.contactName || active?.name || '选择一个聊天'; const currentMessages = active?.sessionId
+    ? messages.filter(m => m.sessionId === active.sessionId || (m.contactId === active.contactId && String(m.sessionId || '').startsWith('pending:')))
+    : messages.filter(m => m.contactId === active?.contactId && String(m.sessionId || '').startsWith('pending:'))
+  useEffect(() => {
+    const element = messageScrollRef.current
+    if (element) element.scrollTop = element.scrollHeight
+  }, [active?.sessionId, currentMessages.length])
   const contactKey = item => `${item?.contactType ?? 0}:${item?.contactId || item?.groupId || item?.sessionId || item?.name || ''}`
   const selectChat = async item => {
     const session = item.sessionId ? item : sessions.find(candidate => candidate.contactId === item.contactId && (candidate.contactType ?? 0) === (item.contactType ?? 0))
@@ -386,14 +407,18 @@ function App() {
     const key = contactKey(selected)
     selectionRef.current = key
     setActive(selected)
-    setMessages([])
+    setShowEmojiPicker(false)
+    const localPending = [...pendingMessagesRef.current.values()]
+      .filter(item => item.contactId === selected.contactId)
+      .map(item => item.message)
+    setMessages(localPending)
     setComposer('')
     if (!selected.sessionId) return
     try {
       const data = await api.messages(selected.sessionId)
       if (selectionRef.current === key) {
         const history = asList(data?.list || data).filter(message => normalizeId(message.sessionId) === selected.sessionId)
-        setMessages(old => mergeMessages(old.filter(message => message.sessionId !== selected.sessionId), history))
+        setMessages(old => mergeMessages(old, history))
       }
     } catch (e) {
       if (selectionRef.current === key) setNotice(e.message)
@@ -413,7 +438,101 @@ function App() {
   }
   const closeContactDetails = () => setContactDetails(null)
   const chatFromDetails = () => { const item = contactDetails?.contact; closeContactDetails(); if (item) selectChat(item) }
-  const send = () => { const content = composer.trim(); if (!content || !active || !active.sessionId || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) { if (!active?.sessionId) setNotice('该联系人还没有可用会话'); else if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) setNotice('消息通道未连接，暂时无法发送'); return } const packet = { clientMessageId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`, sessionId: active.sessionId, contactId: active.contactId, messageContent: content, messageType: 2, contactType: active.contactType ?? 0 }; try { socketRef.current.send(JSON.stringify(packet)); pendingMessagesRef.current.set(packet.clientMessageId, { content, sessionId: active.sessionId }); setComposer('') } catch (e) { setNotice('消息发送失败，请重试') } }
+  const submitMessage = async pending => {
+    if (pending.sending) return
+    pending.sending = true
+    pendingMessagesRef.current.set(pendingMessageKey(pending.clientMessageId), pending)
+    pending.message = { ...pending.message, status: 0, error: null }
+    setMessages(old => mergeMessages(old, [pending.message]))
+    setSessions(old => {
+      const current = old.find(item => item.contactId === pending.contactId)
+      const session = current || pending.session
+      if (!session?.sessionId) return old
+      return [{ ...session, lastMessage: pending.content, lastReceiveTime: pending.message.sendTime }, ...old.filter(item => item.sessionId !== session.sessionId)]
+    })
+    try {
+      const sent = normalizeMessage(await api.sendMessage({
+        contactId: pending.contactId,
+        messageContent: pending.content,
+        clientMessageId: pending.clientMessageId,
+      }))
+      if (pendingMessagesRef.current.get(pendingMessageKey(pending.clientMessageId)) !== pending) return
+      if (sent?.messageId) {
+        pendingMessagesRef.current.delete(pendingMessageKey(pending.clientMessageId))
+        ++dataRevisionRef.current
+        setMessages(old => mergeMessages(old, [{ ...sent, status: 1 }]))
+        setSessions(old => {
+          const sessionData = sent.extendData?.sessionId ? {
+            ...sent.extendData,
+            contactType: sent.extendData.contactId?.startsWith('G') ? 1 : 0,
+            lastMessage: sent.messageContent,
+            lastReceiveTime: sent.sendTime,
+          } : pending.session
+          return sessionData?.sessionId
+            ? [sessionData, ...old.filter(item => item.sessionId !== sessionData.sessionId)].sort((a, b) => sessionTime(b.lastReceiveTime) - sessionTime(a.lastReceiveTime))
+            : old
+        })
+        setActive(old => old?.contactId === pending.contactId
+          ? { ...old, ...(sent.extendData || {}), sessionId: sent.sessionId || old.sessionId }
+          : old)
+      } else {
+        pending.message = { ...pending.message, status: 2, error: '服务器没有返回消息回执' }
+        setMessages(old => mergeMessages(old, [pending.message]))
+      }
+    } catch (error) {
+      if (pendingMessagesRef.current.get(pendingMessageKey(pending.clientMessageId)) !== pending) return
+      const message = error.message || '消息发送失败'
+      if (error instanceof TypeError || error.status >= 500) {
+        pending.message = { ...pending.message, status: 2, error: '发送结果暂不可确认，可安全重试' }
+      } else {
+        pending.message = { ...pending.message, status: 2, error: message }
+      }
+      setMessages(old => mergeMessages(old, [pending.message]))
+      setNotice(pending.message.error)
+    } finally {
+      pending.sending = false
+    }
+  }
+  const send = () => {
+    const content = composer.trim()
+    if (!content || !active) return
+    if (content.length > 10000) {
+      setNotice('消息不能超过10000个字符')
+      return
+    }
+    if (!active.contactId) {
+      setNotice('联系人信息不完整，请刷新后重试')
+      return
+    }
+    const clientMessageId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const message = {
+      clientMessageId,
+      sessionId: active.sessionId || `pending:${active.contactId}`,
+      contactId: active.contactId,
+      contactType: active.contactType ?? (active.contactId.startsWith('G') ? 1 : 0),
+      sendUserId: user.userId,
+      sendUserNickName: user.nickName,
+      messageContent: content,
+      messageType: 2,
+      sendTime: Date.now(),
+      status: 0,
+    }
+    const pending = {
+      clientMessageId,
+      contactId: active.contactId,
+      sessionId: active.sessionId,
+      session: active,
+      content,
+      message,
+    }
+    setComposer('')
+    void submitMessage(pending)
+  }
+  const retryMessage = message => {
+    const pending = pendingMessagesRef.current.get(pendingMessageKey(message.clientMessageId))
+    if (!pending || Number(message.status) !== 2) return
+    void submitMessage(pending)
+  }
   const doSearch = async e => { if (e.key !== 'Enter' || !search.trim()) return; try { setSearchResult(await api.search(search.trim())) } catch (err) { setNotice(err.message) } }
   const doApply = async (id, type = 0) => { try { const pending = await api.applyAdd(id, type, '你好，很高兴认识你'); setNotice(pending ? (type === 1 ? '入群申请已发送' : '好友申请已发送') : '已加入群聊'); setSearchResult(null); if (!pending) await load(user) } catch (e) { setNotice(e.message) } }
   const handleApplyAction = async (item, status) => {
@@ -434,9 +553,19 @@ function App() {
       setProcessingApply(null)
     }
   }
-  const logout = () => { localStorage.removeItem('easychat-token'); socketRef.current?.close(); setUser(null) }
+  const logout = () => {
+    localStorage.removeItem('easychat-token')
+    ++loadRevisionRef.current
+    pendingMessagesRef.current.clear()
+    activeRef.current = null
+    socketRef.current?.close()
+    setActive(null)
+    setMessages([])
+    setSessions([])
+    setUser(null)
+  }
   if (loading) return <div className="loading-screen"><div className="brand-mark">E</div><span>正在打开 EasyChat...</span></div>
-  if (!user) return <Auth onLogin={data => load(data)} />
+  if (!user) return <Auth onLogin={data => { pendingMessagesRef.current.clear(); setMessages([]); setSessions([]); load(data) }} />
   const list = section === 'chats' ? sessions : section === 'contacts' ? contacts : groups
   return (
     <div className="app-shell">
@@ -479,11 +608,11 @@ function App() {
       <main className="chat-pane">
         {showApplications ? <ApplicationsPanel applications={applications} processing={processingApply} onAction={handleApplyAction} onClose={() => setShowApplications(false)} /> : active ? <>
           <header className="chat-header"><button className="mobile-back" onClick={() => setActive(null)}><ChevronLeft /></button><div className="chat-peer"><Avatar name={activeTitle} id={active.contactId} version={active.avatarVersion} tone={active.contactType === 1 ? 'orange' : 'blue'} onClick={() => openContactDetails(active)} title="查看联系人详情" /><div><h3>{activeTitle}</h3><span><i className={socketState === 'open' ? 'online' : ''}></i>{socketState === 'open' ? '在线' : '连接中'}</span></div></div><button className="icon-btn" title="更多" onClick={() => active.contactType === 1 && openContactDetails(active)}><MoreHorizontal /></button></header>
-          <div className="message-scroll">{currentMessages.length ? currentMessages.map((msg, index) => [3, 8, 9, 10, 11, 12].includes(msg.messageType)
-            ? <div className="group-event" key={msg.messageId || `${msg.sendTime}-${index}`}>{msg.messageContent}</div>
-            : <div className={`message-row ${msg.sendUserId === user.userId ? 'mine' : ''}`} key={msg.messageId || `${msg.sendTime}-${index}`}><Avatar name={msg.sendUserNickName || activeTitle} small tone={msg.sendUserId === user.userId ? 'green' : 'blue'} onClick={msg.sendUserId !== user.userId ? () => openContactDetails({ ...active, contactId: msg.sendUserId, contactName: msg.sendUserNickName || activeTitle, nickName: msg.sendUserNickName || activeTitle }) : undefined} title={msg.sendUserId !== user.userId ? '查看联系人详情' : undefined} /><div><span className="message-author">{msg.sendUserId === user.userId ? '我' : msg.sendUserNickName || activeTitle}</span><div className="bubble">{msg.messageContent}</div><time>{timeText(msg.sendTime)}</time></div></div>
+          <div className="message-scroll" ref={messageScrollRef}>{currentMessages.length ? currentMessages.map((msg, index) => [3, 8, 9, 10, 11, 12].includes(msg.messageType)
+            ? <div className="group-event" key={msg.messageId || msg.clientMessageId || `${msg.sendTime}-${index}`}>{msg.messageContent}</div>
+            : <div className={`message-row ${msg.sendUserId === user.userId ? 'mine' : ''}`} key={msg.messageId || msg.clientMessageId || `${msg.sendTime}-${index}`}><Avatar name={msg.sendUserNickName || activeTitle} small tone={msg.sendUserId === user.userId ? 'green' : 'blue'} onClick={msg.sendUserId !== user.userId ? () => openContactDetails({ ...active, contactId: msg.sendUserId, contactName: msg.sendUserNickName || activeTitle, nickName: msg.sendUserNickName || activeTitle }) : undefined} title={msg.sendUserId !== user.userId ? '查看联系人详情' : undefined} /><div><span className="message-author">{msg.sendUserId === user.userId ? '我' : msg.sendUserNickName || activeTitle}</span><div className="bubble">{msg.messageContent}</div><div className="message-meta"><time>{timeText(msg.sendTime)}</time>{Number(msg.status) === 0 && <span className="message-state">发送中</span>}{Number(msg.status) === 2 && <button className="message-retry" title={msg.error || '点击重试发送'} onClick={() => retryMessage(msg)}>发送失败，点击重试</button>}</div></div></div>
           ) : <div className="chat-empty"><div className="empty-icon">✦</div><h3>开始聊天</h3><p>发送一条消息，和 {activeTitle} 打个招呼吧</p></div>}</div>
-          <footer className="composer"><div className="composer-tools"><button title="表情"><Smile /></button><button title="附件"><Paperclip /></button><button title="语音"><Mic /></button></div><textarea value={composer} onChange={e => setComposer(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} placeholder="输入消息，按 Enter 发送" /><button className="send-btn" onClick={send}><Send size={17} /></button></footer>
+          <footer className="composer"><div className="composer-tools"><div className="emoji-control"><button type="button" title="插入表情" aria-label="插入表情" aria-expanded={showEmojiPicker} onClick={() => setShowEmojiPicker(value => !value)}><Smile /></button>{showEmojiPicker && <div className="emoji-picker" role="group" aria-label="选择表情">{CHAT_EMOJIS.map(emoji => <button type="button" key={emoji} aria-label={`插入${emoji}`} onClick={() => { setComposer(value => value + emoji); setShowEmojiPicker(false) }}>{emoji}</button>)}</div>}</div><button type="button" title="附件上传功能暂不可用" disabled><Paperclip /></button><button type="button" title="语音功能暂不可用" disabled><Mic /></button></div><textarea value={composer} maxLength={10000} onChange={e => setComposer(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send() } if (e.key === 'Escape') setShowEmojiPicker(false) }} placeholder="输入消息，按 Enter 发送" /><span className="composer-count">{composer.length}/10000</span><button className="send-btn" disabled={!composer.trim()} title="发送消息" aria-label="发送消息" onClick={send}><Send size={17} /></button></footer>
         </> : <div className="welcome"><div className="welcome-orbit"><MessageCircle size={30} /></div><h1>让每次相遇，都有回应</h1><p>从左侧选择一个聊天，开始你的 EasyChat 时光</p><span className="welcome-status"><i className={socketState === 'open' ? 'online' : ''}></i>{socketState === 'open' ? '实时连接已建立' : '等待实时连接'}</span></div>}
       </main>
       {contactDetails && <ContactDetails contact={contactDetails.contact} loading={contactDetails.loading} userId={user.userId} onClose={closeContactDetails} onChat={chatFromDetails} onEdit={() => { setEditingGroup(contactDetails.contact); closeContactDetails() }} />}

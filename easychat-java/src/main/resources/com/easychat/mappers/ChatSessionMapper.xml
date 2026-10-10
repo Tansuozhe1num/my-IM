@@ -199,6 +199,13 @@
  		 where session_id=#{sessionId}
 	</update>
 
+	<update id="updateLastMessageIfNewer" parameterType="com.easychat.entity.po.ChatSession">
+		 UPDATE chat_session
+		 SET last_message = #{bean.lastMessage}, last_receive_time = #{bean.lastReceiveTime}
+		 WHERE session_id = #{sessionId}
+		   AND (last_receive_time IS NULL OR last_receive_time &lt;= #{bean.lastReceiveTime})
+	</update>
+
 	<!-- 根据SessionId删除-->
 	<delete id="deleteBySessionId">
 		delete from chat_session where session_id=#{sessionId}

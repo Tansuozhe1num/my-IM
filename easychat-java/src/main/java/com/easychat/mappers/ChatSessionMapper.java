@@ -12,6 +12,8 @@ public interface ChatSessionMapper<T,P> extends BaseMapper<T,P> {
 	 */
 	 Integer updateBySessionId(@Param("bean") T t,@Param("sessionId") String sessionId);
 
+	 Integer updateLastMessageIfNewer(@Param("bean") T t,@Param("sessionId") String sessionId);
+
 
 	/**
 	 * 根据SessionId删除

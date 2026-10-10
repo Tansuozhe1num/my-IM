@@ -10,7 +10,11 @@ async function request(path, options = {}) {
   }
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
   const body = await res.json().catch(() => ({}))
-  if (!res.ok || body.status === 'error') throw new Error(body.info || `请求失败 (${res.status})`)
+  if (!res.ok || body.status === 'error') {
+    const error = new Error(body.info || `请求失败 (${res.status})`)
+    error.status = res.status
+    throw error
+  }
   return body.data
 }
 
@@ -43,6 +47,15 @@ export const api = {
   groupInfo: id => request(`/group/getgroupinfo?groupId=${encodeURIComponent(id)}`, { method: 'POST' }),
   sessions: userId => request(`/chatSessionUser/loadDataList?userId=${encodeURIComponent(userId)}&getLastMessage=true&pageNo=1&pageSize=50`, { method: 'POST' }),
   messages: sessionId => request(`/chatMessage/loadDataList?sessionId=${encodeURIComponent(sessionId)}&pageNo=1&pageSize=50&orderBy=send_time asc`, { method: 'POST' }),
+  sendMessage: values => request('/chat/sendMessage', {
+    method: 'POST',
+    body: form({
+      ContactId: values.contactId,
+      MessageContext: values.messageContent,
+      messageType: 2,
+      clientMessageId: values.clientMessageId,
+    }),
+  }),
 }
 
 export function connectSocket(token, onMessage, onState) {

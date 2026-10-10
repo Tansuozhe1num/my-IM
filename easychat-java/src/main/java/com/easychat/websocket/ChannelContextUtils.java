@@ -10,6 +10,7 @@ import com.easychat.entity.po.ChatMessage;
 import com.easychat.entity.po.ChatSessionUser;
 import com.easychat.entity.po.UserInfo;
 import com.easychat.entity.query.*;
+import com.easychat.mappers.ChatMessageMapper;
 import com.easychat.mappers.UserInfoMapper;
 import com.easychat.redis.redisComponent;
 import com.easychat.service.ChatMessageService;
@@ -48,7 +49,7 @@ public class ChannelContextUtils {
     private redisComponent redisComponent;
 
     @Resource
-    private ChatMessageService chatMessageService;
+    private ChatMessageMapper<ChatMessage, ChatMessageQuery> chatMessageMapper;
 
     @Resource
     private UserInfoMapper<UserInfo, UserInfoQuery> userInfoMapper;
@@ -106,7 +107,7 @@ public class ChannelContextUtils {
          */
         List<String> sessions = sessonsInfo.stream().map(ChatSessionUser::getSessionId).collect(Collectors.toList());
         ChatMessageQuery q2 = ChatMessageQuery.builder().sessionIds(sessions).build();
-        List<ChatMessage> chatmessages = chatMessageService.findListByParam(q2);
+        List<ChatMessage> chatmessages = chatMessageMapper.selectList(q2);
 
         /**
          * 好友申请
